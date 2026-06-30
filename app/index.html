@@ -30,55 +30,9 @@
         ], function (App, Page, VBox, HBox, Title, Text, GenericTile, TileContent, Link, FlexBox, Icon) {
 
             // Create tiles for each app
-            var oBatchesTile = new GenericTile({
-                header: "Processing Batches",
-                subheader: "Upload and Manage",
-                press: function() {
-                    window.location.href = "/batches-simple.html";
-                },
-                tileContent: new TileContent({
-                    content: new VBox({
-                        items: [
-                            new Icon({
-                                src: "sap-icon://folder",
-                                size: "3rem",
-                                color: "#0070f2"
-                            }).addStyleClass("sapUiTinyMarginBottom"),
-                            new Text({
-                                text: "Upload .eml or .pdf files, track processing progress, and view document counts."
-                            }).addStyleClass("sapUiTinyMarginTop")
-                        ],
-                        alignItems: "Center"
-                    })
-                })
-            }).addStyleClass("sapUiMediumMargin");
-
-            var oDocumentsTile = new GenericTile({
-                header: "Invoice Documents",
-                subheader: "View and Validate",
-                press: function() {
-                    window.location.href = "/documents-simple.html";
-                },
-                tileContent: new TileContent({
-                    content: new VBox({
-                        items: [
-                            new Icon({
-                                src: "sap-icon://document",
-                                size: "3rem",
-                                color: "#0070f2"
-                            }).addStyleClass("sapUiTinyMarginBottom"),
-                            new Text({
-                                text: "View extracted invoice data, validate mandatory fields, and review confidence scores."
-                            }).addStyleClass("sapUiTinyMarginTop")
-                        ],
-                        alignItems: "Center"
-                    })
-                })
-            }).addStyleClass("sapUiMediumMargin");
-
-            var oDocAITestTile = new GenericTile({
-                header: "DocAI v4 API Test",
-                subheader: "Test Integration",
+            var oDocAIWorkbenchTile = new GenericTile({
+                header: "DocAI Workbench",
+                subheader: "Main Application",
                 press: function() {
                     window.location.href = "/docai-test.html";
                 },
@@ -86,12 +40,35 @@
                     content: new VBox({
                         items: [
                             new Icon({
-                                src: "sap-icon://lab",
+                                src: "sap-icon://business-card",
                                 size: "3rem",
                                 color: "#0070f2"
                             }).addStyleClass("sapUiTinyMarginBottom"),
                             new Text({
-                                text: "Test SAP Document Information Extraction API v4 (OData) integration with real-time monitoring."
+                                text: "Multi-document processing with SAP Document Information Extraction API v4. Upload, process, and validate invoices."
+                            }).addStyleClass("sapUiTinyMarginTop")
+                        ],
+                        alignItems: "Center"
+                    })
+                })
+            }).addStyleClass("sapUiMediumMargin");
+
+            var oUploadDemoTile = new GenericTile({
+                header: "Upload Demo",
+                subheader: "Batch File Upload",
+                press: function() {
+                    window.location.href = "/upload-demo.html";
+                },
+                tileContent: new TileContent({
+                    content: new VBox({
+                        items: [
+                            new Icon({
+                                src: "sap-icon://upload",
+                                size: "3rem",
+                                color: "#0070f2"
+                            }).addStyleClass("sapUiTinyMarginBottom"),
+                            new Text({
+                                text: "Demonstration of file upload capabilities: .eml, .zip, PDF files with batch processing."
                             }).addStyleClass("sapUiTinyMarginTop")
                         ],
                         alignItems: "Center"
@@ -101,13 +78,13 @@
 
             // Features list
             var aFeatures = [
-                ".eml/.pdf Upload",
-                "ZIP Extraction",
-                "DocAI Integration",
-                "Webhook Support",
-                "Multi-version Parsing",
-                "Confidence Tracking",
-                "Field Validation"
+                "Multi-document Processing",
+                "DocAI v4 Integration",
+                "Real-time Status Tracking",
+                "Confidence Scoring",
+                "Field Validation & Editing",
+                "S/4HANA Integration",
+                "PDF Viewer"
             ];
 
             var oFeatureBox = new FlexBox({
@@ -132,12 +109,10 @@
             // Testing section
             var oTestBox = new VBox({
                 items: [
-                    new Title({ text: "Testing", level: "H3" }).addStyleClass("sapUiSmallMarginTop"),
-                    new Text({ text: "Test DocAI v4 API: /docai-test.html" }),
+                    new Title({ text: "Development", level: "H3" }).addStyleClass("sapUiSmallMarginTop"),
                     new Text({ text: "Test webhook: node test/test-callback.js" }),
                     new Text({ text: "Test DocAI v4: node test/test-docai-v4.js" }),
-                    new Text({ text: "Verify data: node test/verify-data.js" }),
-                    new Text({ text: "Upload files: node test/upload-test-files.js" })
+                    new Text({ text: "Verify data: node test/verify-data.js" })
                 ]
             }).addStyleClass("sapUiMediumMarginTop");
 
@@ -160,7 +135,7 @@
             var oTilesBox = new FlexBox({
                 wrap: "Wrap",
                 justifyContent: "Center",
-                items: [oBatchesTile, oDocumentsTile, oDocAITestTile]
+                items: [oDocAIWorkbenchTile, oUploadDemoTile]
             }).addStyleClass("sapUiMediumMarginTop sapUiMediumMarginBottom");
 
             // Main content

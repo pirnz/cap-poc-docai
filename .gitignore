@@ -38,3 +38,5 @@ mta_archives/
 .env
 db.sqlite*
 test/files/
+tmp/
+PROMPT.md

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DocAI v4 API Test</title>
+    <title>DocAI Multi-Document Workbench</title>
     <script
         id="sap-ui-bootstrap"
         src="https://ui5.sap.com/1.120.0/resources/sap-ui-core.js"
@@ -37,8 +37,12 @@
             "sap/m/Select",
             "sap/ui/core/Item",
             "sap/ui/model/json/JSONModel",
-            "sap/ui/core/HTML"
-        ], function (App, Page, VBox, HBox, Title, Label, Text, Input, TextArea, Button, MessageToast, MessageBox, ProgressIndicator, Panel, Icon, FileUploader, ObjectStatus, ComboBox, Select, Item, JSONModel, HTML) {
+            "sap/ui/core/HTML",
+            "sap/m/Table",
+            "sap/m/Column",
+            "sap/m/ColumnListItem",
+            "sap/m/FlexItemData"
+        ], function (App, Page, VBox, HBox, Title, Label, Text, Input, TextArea, Button, MessageToast, MessageBox, ProgressIndicator, Panel, Icon, FileUploader, ObjectStatus, ComboBox, Select, Item, JSONModel, HTML, Table, Column, ColumnListItem, FlexItemData) {
 
             // State variables
             var currentDocumentId = null;
@@ -66,6 +70,169 @@
                 selectedSchemaVersionId: null,
                 loading: false
             });
+
+            // JSON model for documents management
+            var oDocumentsModel = new JSONModel({
+                documents: [],
+                currentDocumentId: null,
+                view: "list"
+            });
+
+            // Helper function: Generate UUID
+            function generateUUID() {
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    var r = Math.random() * 16 | 0;
+                    var v = c === 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            }
+
+            // Helper function: Add document
+            function addDocument(fileName, schemaVersionId, clientId) {
+                var documents = oDocumentsModel.getProperty("/documents");
+                var newDoc = {
+                    id: generateUUID(),
+                    fileName: fileName,
+                    documentId: null,
+                    schemaVersionId: schemaVersionId,
+                    clientId: clientId,
+                    status: "pending",
+                    extractionStatus: null,
+                    uploadedAt: new Date().toISOString(),
+                    logs: [],
+                    headerFields: [],
+                    lineItems: [],
+                    documentConfidence: 0,
+                    pdfData: null,
+                    editedEntities: {}
+                };
+                documents.push(newDoc);
+                oDocumentsModel.setProperty("/documents", documents);
+                return newDoc;
+            }
+
+            // Helper function: Update document
+            function updateDocument(docId, updates) {
+                var documents = oDocumentsModel.getProperty("/documents");
+                var docIndex = documents.findIndex(function(d) { return d.id === docId; });
+                if (docIndex !== -1) {
+                    var doc = documents[docIndex];
+                    Object.keys(updates).forEach(function(key) {
+                        doc[key] = updates[key];
+                    });
+                    documents[docIndex] = doc;
+                    oDocumentsModel.setProperty("/documents", documents);
+                    return doc;
+                }
+                return null;
+            }
+
+            // Helper function: Get current document
+            function getCurrentDocument() {
+                var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                if (!currentDocId) return null;
+                var documents = oDocumentsModel.getProperty("/documents");
+                return documents.find(function(d) { return d.id === currentDocId; });
+            }
+
+            // Helper function: Update progress indicator for document
+            function updateProgressForDocument(doc) {
+                if (!doc) return;
+
+                oProgress.setVisible(true);
+
+                var status = doc.status;
+                if (status === "pending") {
+                    oProgress.setPercentValue(0);
+                    oProgress.setState("None");
+                    oProgress.setDisplayValue("Pending upload");
+                } else if (status === "uploading") {
+                    oProgress.setPercentValue(30);
+                    oProgress.setState("Information");
+                    oProgress.setDisplayValue("Uploading...");
+                } else if (status === "PENDING" || status === "processing") {
+                    oProgress.setPercentValue(50);
+                    oProgress.setState("Information");
+                    oProgress.setDisplayValue("Processing...");
+                } else if (status === "reviewNeeded") {
+                    oProgress.setPercentValue(80);
+                    oProgress.setState("Warning");
+                    oProgress.setDisplayValue("Review needed");
+                } else if (status === "confirmed" || status === "readyForPosting") {
+                    oProgress.setPercentValue(100);
+                    oProgress.setState("Success");
+                    oProgress.setDisplayValue("Confirmed");
+                } else if (status === "failed" || status === "ERROR" || status === "FAILED") {
+                    oProgress.setPercentValue(100);
+                    oProgress.setState("Error");
+                    oProgress.setDisplayValue("Failed");
+                } else {
+                    oProgress.setPercentValue(70);
+                    oProgress.setState("Information");
+                    oProgress.setDisplayValue(status || "Processing");
+                }
+            }
+
+            // Helper function: Switch to list view
+            function switchToListView() {
+                oDocumentsModel.setProperty("/view", "list");
+                oDocumentsModel.setProperty("/currentDocumentId", null);
+
+                // Update UI visibility
+                oListViewContainer.setVisible(true);
+                oDetailViewContainer.setVisible(false);
+
+                // Stop polling when leaving detail view
+                stopPolling();
+
+                // Clear detail view UI
+                oDocumentIdText.setText("");
+                oProgress.setVisible(false);
+                oExtractionResultsPanel.setVisible(false);
+                oPdfViewerPanel.setVisible(false);
+            }
+
+            // Helper function: Switch to detail view
+            function switchToDetailView(docId) {
+                oDocumentsModel.setProperty("/view", "detail");
+                oDocumentsModel.setProperty("/currentDocumentId", docId);
+
+                // Update UI visibility
+                oListViewContainer.setVisible(false);
+                oDetailViewContainer.setVisible(true);
+
+                // Update button states for this document
+                updateButtonStates();
+
+                // Display logs for this document
+                displayLogsForDocument(docId);
+
+                // Load document data into UI
+                var doc = getCurrentDocument();
+                if (doc) {
+                    oDocumentIdText.setText("Document ID: " + (doc.documentId || "Not uploaded yet"));
+
+                    // Update progress indicator
+                    if (doc.status) {
+                        updateProgressForDocument(doc);
+                    }
+
+                    // Load results if available
+                    if (doc.headerFields && doc.headerFields.length > 0) {
+                        documentEntities = {
+                            headerFields: doc.headerFields,
+                            lineItems: doc.lineItems,
+                            documentConfidence: doc.documentConfidence
+                        };
+                        buildResultsContent();
+                        oExtractionResultsPanel.setVisible(true);
+
+                        if (doc.pdfData) {
+                            displayPdf(doc.pdfData);
+                        }
+                    }
+                }
+            }
 
             // Load available clients from schemas
             function loadClients() {
@@ -234,36 +401,88 @@
                 text: ""
             }).addStyleClass("sapUiSmallMarginTop");
 
+            // Per-document logging function
+            function logForDocument(docId, message, isError) {
+                if (!docId) return;
+
+                var documents = oDocumentsModel.getProperty("/documents");
+                var docIndex = documents.findIndex(function(d) { return d.id === docId; });
+
+                if (docIndex !== -1) {
+                    var doc = documents[docIndex];
+                    if (!doc.logs) {
+                        doc.logs = [];
+                    }
+
+                    doc.logs.push({
+                        timestamp: new Date().toISOString(),
+                        message: message,
+                        isError: isError || false
+                    });
+
+                    documents[docIndex] = doc;
+                    oDocumentsModel.setProperty("/documents", documents);
+                }
+            }
+
             // Log function
             function log(message, isError) {
                 var timestamp = new Date().toLocaleTimeString();
                 var prefix = isError ? "❌ ERROR" : "✅";
                 var line = `[${timestamp}] ${prefix} ${message}\n`;
                 oResponseArea.setValue(oResponseArea.getValue() + line);
+
+                // Also log to current document if exists
+                var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                if (currentDocId) {
+                    logForDocument(currentDocId, message, isError);
+                }
             }
 
             function logJson(label, data) {
                 var timestamp = new Date().toLocaleTimeString();
                 var line = `[${timestamp}] 📋 ${label}:\n${JSON.stringify(data, null, 2)}\n\n`;
                 oResponseArea.setValue(oResponseArea.getValue() + line);
+
+                // Also log to current document if exists
+                var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                if (currentDocId) {
+                    logForDocument(currentDocId, `${label}: ${JSON.stringify(data)}`, false);
+                }
+            }
+
+            // Display logs for a specific document
+            function displayLogsForDocument(docId) {
+                if (!docId) {
+                    oResponseArea.setValue("");
+                    return;
+                }
+
+                var documents = oDocumentsModel.getProperty("/documents");
+                var doc = documents.find(function(d) { return d.id === docId; });
+
+                if (!doc || !doc.logs || doc.logs.length === 0) {
+                    oResponseArea.setValue("No logs available for this document.\n");
+                    return;
+                }
+
+                var logText = "";
+                doc.logs.forEach(function(logEntry) {
+                    var timestamp = new Date(logEntry.timestamp).toLocaleTimeString();
+                    var prefix = logEntry.isError ? "❌ ERROR" : "✅";
+                    logText += `[${timestamp}] ${prefix} ${logEntry.message}\n`;
+                });
+
+                oResponseArea.setValue(logText);
             }
 
             function clearLog() {
-                oResponseArea.setValue("");
-                oDocumentIdText.setText("");
-                currentDocumentId = null;
-                currentSchemaVersionId = oSchemaVersionsModel.getProperty("/selectedSchemaVersionId");
-                currentDocumentStatus = null;
-                schemaFields = {};
-                documentEntities = { headerFields: [], lineItems: [], documentConfidence: 0 };
-                editedEntities = {};
-                updateGetResultsButton();
-                oExtractionResultsPanel.setVisible(false);
+                // Deprecated - logs are now per-document
+                // Left here for backward compatibility if needed
             }
 
             // Test API connection
             function testConnection() {
-                clearLog();
                 oProgress.setVisible(true);
                 oProgress.setState("Information");
                 oProgress.setDisplayValue("Testing connection...");
@@ -280,18 +499,14 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.error) {
-                        log("Connection test failed: " + data.error.message, true);
                         oProgress.setVisible(false);
                         MessageBox.error("Connection test failed: " + data.error.message);
                     } else {
-                        log("Connection test completed");
-                        logJson("Response", data);
                         oProgress.setVisible(false);
-                        MessageToast.show("Connection test completed");
+                        MessageToast.show("Connection test completed successfully");
                     }
                 })
                 .catch(error => {
-                    log("Connection test failed: " + error.message, true);
                     oProgress.setVisible(false);
                     MessageBox.error("Connection test failed: " + error.message);
                 });
@@ -320,8 +535,17 @@
                     return;
                 }
 
-                clearLog();
-                log("Starting document upload: " + file.name);
+                // Create new document in the model
+                var newDoc = addDocument(file.name, selectedSchemaVersionId, selectedClient);
+                var newDocId = newDoc.id;
+
+                // Switch to detail view for this document
+                switchToDetailView(newDocId);
+
+                // Update status to uploading
+                updateDocument(newDocId, { status: "uploading" });
+                logForDocument(newDocId, "Starting document upload: " + file.name, false);
+
                 oProgress.setVisible(true);
                 oProgress.setPercentValue(10);
                 oProgress.setState("Information");
@@ -343,11 +567,9 @@
                         fileContent: fileContent
                     };
 
-                    log("Sending to DocAI via destination: " + requestData.destination);
-                    log("Schema Version ID: " + requestData.schemaVersion_ID);
-                    log("Client ID: " + requestData.clientId);
-
-                    currentSchemaVersionId = selectedSchemaVersionId;
+                    logForDocument(newDocId, "Sending to DocAI via destination: " + requestData.destination, false);
+                    logForDocument(newDocId, "Schema Version ID: " + requestData.schemaVersion_ID, false);
+                    logForDocument(newDocId, "Client ID: " + requestData.clientId, false);
 
                     fetch("/invoice/submitToDocAI", {
                         method: "POST",
@@ -362,17 +584,27 @@
                             throw new Error(data.error.message || "Upload failed");
                         }
 
-                        currentDocumentId = data.documentId;
-                        log("Document uploaded successfully!");
-                        log("Document ID: " + currentDocumentId);
-                        oDocumentIdText.setText("Document ID: " + currentDocumentId);
-                        logJson("Response", data);
+                        var docAIId = data.documentId;
+                        logForDocument(newDocId, "Document uploaded successfully!", false);
+                        logForDocument(newDocId, "Document ID: " + docAIId, false);
+                        logForDocument(newDocId, JSON.stringify(data), false);
+
+                        // Update the document in the model
+                        updateDocument(newDocId, {
+                            documentId: docAIId,
+                            status: "PENDING"
+                        });
+
+                        oDocumentIdText.setText("Document ID: " + docAIId);
 
                         oProgress.setPercentValue(50);
                         oProgress.setState("Success");
                         oProgress.setDisplayValue("Document uploaded");
 
-                        MessageToast.show("Document uploaded: " + currentDocumentId);
+                        // Update button states
+                        updateButtonStates();
+
+                        MessageToast.show("Document uploaded: " + docAIId);
 
                         // Auto-start polling
                         setTimeout(function() {
@@ -380,7 +612,8 @@
                         }, 2000);
                     })
                     .catch(error => {
-                        log("Upload failed: " + error.message, true);
+                        logForDocument(newDocId, "Upload failed: " + error.message, true);
+                        updateDocument(newDocId, { status: "failed" });
                         oProgress.setVisible(false);
                         MessageBox.error("Upload failed: " + error.message);
                     });
@@ -389,23 +622,17 @@
                 reader.readAsDataURL(file);
             }
 
-            // Update Get Results button enabled state
-            function updateGetResultsButton() {
-                var enabled = currentDocumentId !== null &&
-                              (currentDocumentStatus === "reviewNeeded" ||
-                               currentDocumentStatus === "readyForPosting" ||
-                               currentDocumentStatus === "confirmed");
-                oGetResultsButton.setEnabled(enabled);
-            }
-
             // Check document status
             function checkStatus() {
-                if (!currentDocumentId) {
+                var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                var currentDoc = getCurrentDocument();
+
+                if (!currentDocId || !currentDoc || !currentDoc.documentId) {
                     MessageBox.warning("No document ID. Please upload a document first.");
                     return;
                 }
 
-                log("Checking status for: " + currentDocumentId);
+                logForDocument(currentDocId, "Checking status for: " + currentDoc.documentId, false);
 
                 fetch("/invoice/getDocAIStatus", {
                     method: "POST",
@@ -414,36 +641,105 @@
                     },
                     body: JSON.stringify({
                         destination: DESTINATION,
-                        documentId: currentDocumentId
+                        documentId: currentDoc.documentId
                     })
                 })
                 .then(response => response.json())
                 .then(data => {
-                    currentDocumentStatus = data.status;
-                    log("Status retrieved: " + data.status);
-                    logJson("Status Response", data);
+                    var newStatus = data.status;
+                    logForDocument(currentDocId, "Status retrieved: " + newStatus, false);
+                    logForDocument(currentDocId, JSON.stringify(data), false);
 
-                    updateGetResultsButton();
+                    // Update document with new status
+                    updateDocument(currentDocId, {
+                        status: newStatus,
+                        extractionStatus: newStatus
+                    });
 
-                    if (data.status === "DONE" || data.status === "SUCCEEDED" || data.status === "reviewNeeded") {
-                        oProgress.setPercentValue(100);
-                        oProgress.setState("Success");
-                        oProgress.setDisplayValue("Processing complete!");
+                    // Update UI if we're viewing this document
+                    var viewingDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                    if (viewingDocId === currentDocId) {
+                        updateProgressForDocument(getCurrentDocument());
+                        updateButtonStates();
+                    }
+
+                    if (newStatus === "DONE" || newStatus === "SUCCEEDED" || newStatus === "reviewNeeded") {
+                        if (viewingDocId === currentDocId) {
+                            oProgress.setPercentValue(100);
+                            oProgress.setState("Success");
+                            oProgress.setDisplayValue("Processing complete!");
+                        }
                         stopPolling();
                         MessageBox.success("Document processing completed!");
-                    } else if (data.status === "FAILED" || data.status === "ERROR") {
-                        oProgress.setState("Error");
-                        oProgress.setDisplayValue("Processing failed");
+                    } else if (newStatus === "FAILED" || newStatus === "ERROR") {
+                        if (viewingDocId === currentDocId) {
+                            oProgress.setState("Error");
+                            oProgress.setDisplayValue("Processing failed");
+                        }
                         stopPolling();
                         MessageBox.error("Document processing failed");
                     } else {
-                        oProgress.setPercentValue(70);
-                        oProgress.setDisplayValue("Processing: " + data.status);
+                        if (viewingDocId === currentDocId) {
+                            oProgress.setPercentValue(70);
+                            oProgress.setDisplayValue("Processing: " + newStatus);
+                        }
                     }
                 })
                 .catch(error => {
-                    log("Status check failed: " + error.message, true);
+                    logForDocument(currentDocId, "Status check failed: " + error.message, true);
                     MessageToast.show("Status check failed");
+                });
+            }
+
+            // Poll all processing documents
+            function pollAllProcessingDocuments() {
+                var documents = oDocumentsModel.getProperty("/documents");
+                var processingDocs = documents.filter(function(doc) {
+                    return doc.documentId && (doc.status === "PENDING" || doc.status === "processing" || doc.status === "RUNNING");
+                });
+
+                if (processingDocs.length === 0) {
+                    stopPolling();
+                    return;
+                }
+
+                processingDocs.forEach(function(doc) {
+                    fetch("/invoice/getDocAIStatus", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({
+                            destination: DESTINATION,
+                            documentId: doc.documentId
+                        })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        var newStatus = data.status;
+                        logForDocument(doc.id, "Status: " + newStatus, false);
+
+                        // Update document with new status
+                        updateDocument(doc.id, {
+                            status: newStatus,
+                            extractionStatus: newStatus
+                        });
+
+                        // Update UI if we're viewing this document
+                        var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                        if (currentDocId === doc.id) {
+                            updateProgressForDocument(getCurrentDocument());
+                            updateButtonStates();
+                        }
+
+                        // If document is done, show notification
+                        if (newStatus === "DONE" || newStatus === "SUCCEEDED" || newStatus === "reviewNeeded") {
+                            MessageToast.show("Document " + doc.fileName + " is ready for review");
+                        }
+                    })
+                    .catch(error => {
+                        logForDocument(doc.id, "Status check failed: " + error.message, true);
+                    });
                 });
             }
 
@@ -456,7 +752,8 @@
 
             // Fetch schema field definitions
             function fetchSchemaFields(schemaVersionId) {
-                log("Fetching schema fields for version ID: " + schemaVersionId);
+                var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                logForDocument(currentDocId, "Fetching schema fields for version ID: " + schemaVersionId, false);
 
                 return fetch("/invoice/getSchemaFields", {
                     method: "POST",
@@ -478,19 +775,20 @@
                                     ID: field.ID
                                 };
                             });
-                            log("Loaded " + fields.length + " schema field definitions");
+                            logForDocument(currentDocId, "Loaded " + fields.length + " schema field definitions", false);
                         }
                         return schemaFields;
                     })
                     .catch(error => {
-                        log("Failed to fetch schema fields: " + error.message, true);
+                        logForDocument(currentDocId, "Failed to fetch schema fields: " + error.message, true);
                         throw error;
                     });
             }
 
             // Fetch document extraction results
             function fetchDocumentEntities(documentId) {
-                log("Fetching document entities for ID: " + documentId);
+                var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                logForDocument(currentDocId, "Fetching document entities for ID: " + documentId, false);
 
                 return fetch("/invoice/getDocAIResults", {
                     method: "POST",
@@ -506,15 +804,31 @@
                             throw new Error(data.error.message || "Failed to fetch results");
                         }
 
-                        // Store PDF file data
-                        if (data.fileData) {
-                            pdfData = data.fileData;
-                            log("PDF file data loaded");
+                        // Store results in document object
+                        if (currentDocId) {
+                            var updates = {};
+
+                            // Store PDF file data
+                            if (data.fileData) {
+                                updates.pdfData = data.fileData;
+                                logForDocument(currentDocId, "PDF file data loaded", false);
+                            }
+
+                            // Store structured format
+                            if (data.headerFields && data.lineItems) {
+                                updates.headerFields = data.headerFields;
+                                updates.lineItems = data.lineItems;
+                                updates.documentConfidence = data.documentConfidence;
+                                logForDocument(currentDocId, "Loaded " + data.headerFields.length + " header fields and " + data.lineItems.length + " line items", false);
+                            } else {
+                                logForDocument(currentDocId, "No structured data found in response", true);
+                            }
+
+                            updateDocument(currentDocId, updates);
                         }
 
                         // New structured format
                         if (data.headerFields && data.lineItems) {
-                            log("Loaded " + data.headerFields.length + " header fields and " + data.lineItems.length + " line items");
                             return {
                                 headerFields: data.headerFields,
                                 lineItems: data.lineItems,
@@ -522,11 +836,10 @@
                             };
                         }
 
-                        log("No structured data found in response", true);
                         return { headerFields: [], lineItems: [], documentConfidence: 0 };
                     })
                     .catch(error => {
-                        log("Failed to fetch document entities: " + error.message, true);
+                        logForDocument(currentDocId, "Failed to fetch document entities: " + error.message, true);
                         throw error;
                     });
             }
@@ -534,9 +847,16 @@
             // Build extraction results content
             function buildResultsContent() {
                 oExtractionResultsContent.destroyItems();
-                editedEntities = {};
 
-                // Use document confidence from backend
+                // Reset editedEntities and load from current document
+                var currentDoc = getCurrentDocument();
+                if (currentDoc) {
+                    editedEntities = currentDoc.editedEntities || {};
+                } else {
+                    editedEntities = {};
+                }
+
+                // Use document confidence from current document
                 var docConfidence = documentEntities.documentConfidence || 0;
                 var docConfidenceText = Math.round(docConfidence * 100) + "%";
                 var docConfidenceState = getConfidenceState(docConfidence);
@@ -580,15 +900,22 @@
                         var oFieldInput = new Input({
                             value: fieldValue,
                             width: "100%",
-                            change: function(oEvent) {
-                                var newValue = oEvent.getParameter("value");
-                                editedEntities[entity.ID] = {
-                                    entity: entity,
-                                    originalValue: fieldValue,
-                                    editedValue: newValue,
-                                    modified: newValue !== fieldValue
+                            change: (function(ent, origVal) {
+                                return function(oEvent) {
+                                    var newValue = oEvent.getParameter("value");
+                                    editedEntities[ent.ID] = {
+                                        entity: ent,
+                                        originalValue: origVal,
+                                        editedValue: newValue,
+                                        modified: newValue !== origVal
+                                    };
+                                    // Save to document
+                                    var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                                    if (currentDocId) {
+                                        updateDocument(currentDocId, { editedEntities: editedEntities });
+                                    }
                                 };
-                            }
+                            })(entity, fieldValue)
                         });
 
                         var confidence = entity.confidence || 0;
@@ -609,7 +936,7 @@
                                     text: fieldLabel,
                                     width: "200px"
                                 }).addStyleClass("sapUiSmallMarginEnd"),
-                                oFieldInput.setLayoutData(new sap.m.FlexItemData({ growFactor: 1 })).addStyleClass("sapUiSmallMarginEnd"),
+                                oFieldInput.setLayoutData(new FlexItemData({ growFactor: 1 })).addStyleClass("sapUiSmallMarginEnd"),
                                 oConfidenceStatus
                             ]
                         }).addStyleClass("sapUiTinyMarginTop");
@@ -684,17 +1011,22 @@
                                 var oFieldInput = new Input({
                                     value: fieldValue,
                                     width: width,
-                                    change: (function(e) {
+                                    change: (function(e, origVal) {
                                         return function(oEvent) {
                                             var newValue = oEvent.getParameter("value");
                                             editedEntities[e.ID] = {
                                                 entity: e,
-                                                originalValue: fieldValue,
+                                                originalValue: origVal,
                                                 editedValue: newValue,
-                                                modified: newValue !== fieldValue
+                                                modified: newValue !== origVal
                                             };
+                                            // Save to document
+                                            var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                                            if (currentDocId) {
+                                                updateDocument(currentDocId, { editedEntities: editedEntities });
+                                            }
                                         };
-                                    })(entity)
+                                    })(entity, fieldValue)
                                 });
 
                                 cells.push(oFieldInput);
@@ -736,25 +1068,27 @@
 
             // Get extraction results
             function getResults() {
-                if (!currentDocumentId) {
+                var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                var currentDoc = getCurrentDocument();
+
+                if (!currentDocId || !currentDoc) {
                     MessageBox.warning("No document ID. Please upload a document first.");
                     return;
                 }
 
-                if (!currentSchemaVersionId) {
+                if (!currentDoc.schemaVersionId) {
                     MessageBox.warning("No schema version ID available.");
                     return;
                 }
 
-                log("Fetching extraction results...");
+                logForDocument(currentDocId, "Fetching extraction results...", false);
 
                 oExtractionResultsPanel.setVisible(false);
                 oPdfViewerPanel.setVisible(false);
-                pdfData = null; // Reset PDF data
 
-                fetchSchemaFields(currentSchemaVersionId)
+                fetchSchemaFields(currentDoc.schemaVersionId)
                     .then(function() {
-                        return fetchDocumentEntities(currentDocumentId);
+                        return fetchDocumentEntities(currentDoc.documentId);
                     })
                     .then(function(results) {
                         documentEntities = results;
@@ -767,28 +1101,37 @@
                         buildResultsContent();
                         oExtractionResultsPanel.setVisible(true);
 
-                        // Display PDF if available - pdfData is set in fetchDocumentEntities
-                        if (pdfData) {
-                            log("Displaying PDF in viewer...");
-                            displayPdf(pdfData);
+                        // Display PDF if available from current document
+                        var doc = getCurrentDocument();
+                        if (doc && doc.pdfData) {
+                            logForDocument(currentDocId, "Displaying PDF in viewer...", false);
+                            displayPdf(doc.pdfData);
                         } else {
-                            log("No PDF data available to display");
+                            logForDocument(currentDocId, "No PDF data available to display", false);
                         }
 
-                        log("Extraction results displayed successfully");
+                        logForDocument(currentDocId, "Extraction results displayed successfully", false);
                         MessageToast.show("Extraction results loaded");
                     })
                     .catch(function(error) {
-                        log("Failed to get results: " + error.message, true);
+                        logForDocument(currentDocId, "Failed to get results: " + error.message, true);
                         MessageBox.error("Failed to get results: " + error.message);
                     });
             }
 
             // Display PDF in viewer
             function displayPdf(base64Data) {
+                var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+
                 if (!base64Data) {
-                    log("No PDF data available", true);
-                    return;
+                    // Try to get from current document
+                    var currentDoc = getCurrentDocument();
+                    if (currentDoc && currentDoc.pdfData) {
+                        base64Data = currentDoc.pdfData;
+                    } else {
+                        logForDocument(currentDocId, "No PDF data available", true);
+                        return;
+                    }
                 }
 
                 // Make panel visible first to ensure iframe is rendered
@@ -800,31 +1143,35 @@
                     if (pdfViewer) {
                         try {
                             pdfViewer.src = "data:application/pdf;base64," + base64Data;
-                            log("PDF loaded in viewer");
+                            logForDocument(currentDocId, "PDF loaded in viewer", false);
                         } catch (error) {
-                            log("Failed to load PDF: " + error.message, true);
+                            logForDocument(currentDocId, "Failed to load PDF: " + error.message, true);
                         }
                     } else {
-                        log("PDF viewer iframe not found in DOM", true);
+                        logForDocument(currentDocId, "PDF viewer iframe not found in DOM", true);
                     }
                 }, 100);
             }
 
             // Confirm document
             function confirmDocument() {
-                if (!currentDocumentId) {
+                var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                var currentDoc = getCurrentDocument();
+
+                if (!currentDocId || !currentDoc || !currentDoc.documentId) {
                     MessageBox.warning("No document ID available.");
                     return;
                 }
 
-                log("Starting confirmation workflow...");
+                logForDocument(currentDocId, "Starting confirmation workflow...", false);
 
-                // Check if there are edited entities
-                var modifiedEntityIds = Object.keys(editedEntities).filter(id => editedEntities[id].modified);
+                // Get edited entities from current document
+                var docEditedEntities = currentDoc.editedEntities || {};
+                var modifiedEntityIds = Object.keys(docEditedEntities).filter(id => docEditedEntities[id].modified);
 
                 // Prepare entities array for the action
                 var entitiesPayload = modifiedEntityIds.map(entityId => {
-                    var editInfo = editedEntities[entityId];
+                    var editInfo = docEditedEntities[entityId];
                     var entity = editInfo.entity;
 
                     var entityUpdate = {
@@ -847,9 +1194,9 @@
                 });
 
                 if (entitiesPayload.length > 0) {
-                    log("Updating " + entitiesPayload.length + " edited entities and confirming...");
+                    logForDocument(currentDocId, "Updating " + entitiesPayload.length + " edited entities and confirming...", false);
                 } else {
-                    log("No edited entities, confirming document...");
+                    logForDocument(currentDocId, "No edited entities, confirming document...", false);
                 }
 
                 // Call the new CAP action that updates and confirms in one go
@@ -859,7 +1206,7 @@
                         "Content-Type": "application/json"
                     },
                     body: JSON.stringify({
-                        documentId: currentDocumentId,
+                        documentId: currentDoc.documentId,
                         entities: entitiesPayload,
                         useForInstantLearning: false
                     })
@@ -873,18 +1220,281 @@
                     return response.json();
                 })
                 .then(result => {
-                    log("Document updated and confirmed successfully!");
-                    logJson("Confirmation Result", result);
+                    logForDocument(currentDocId, "Document updated and confirmed successfully!", false);
+                    logForDocument(currentDocId, JSON.stringify(result), false);
                     MessageBox.success("Document updated and confirmed successfully!");
 
                     // Update status display
                     oProgress.setState("Success");
                     oProgress.setDisplayValue("Confirmed");
+
+                    // Update document status
+                    updateDocument(currentDocId, { status: "confirmed" });
+
+                    // Enable post to S/4 button
+                    updateButtonStates();
                 })
                 .catch(error => {
-                    log("Confirmation failed: " + error.message, true);
+                    logForDocument(currentDocId, "Confirmation failed: " + error.message, true);
                     MessageBox.error("Confirmation failed: " + error.message);
                 });
+            }
+
+            // Post invoice to S/4HANA
+            function postInvoiceToS4() {
+                var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                var currentDoc = getCurrentDocument();
+
+                if (!currentDocId || !currentDoc) {
+                    MessageBox.warning("No document selected.");
+                    return;
+                }
+
+                if (!currentDoc.headerFields || currentDoc.headerFields.length === 0) {
+                    MessageBox.warning("No invoice data available. Please get results first.");
+                    return;
+                }
+
+                logForDocument(currentDocId, "Preparing to post invoice to S/4HANA...", false);
+
+                // Build field map from extracted data
+                var fieldMap = {};
+                currentDoc.headerFields.forEach(function(field) {
+                    var fieldName = field.name ? field.name.toLowerCase() : '';
+                    var value;
+                    if (field.dataType === "Number") {
+                        value = field.numberValue;
+                    } else if (field.dataType === "Date") {
+                        value = field.dateValue;
+                    } else {
+                        value = field.stringValue;
+                    }
+
+                    // Store by original name and lowercase for easier lookup
+                    fieldMap[field.name] = value;
+                    if (fieldName) {
+                        fieldMap[fieldName] = value;
+                    }
+                });
+
+                // Helper function to get field value with multiple possible names
+                function getFieldValue(possibleNames) {
+                    for (var i = 0; i < possibleNames.length; i++) {
+                        var name = possibleNames[i];
+                        if (fieldMap[name] !== undefined && fieldMap[name] !== null && fieldMap[name] !== "") {
+                            return fieldMap[name];
+                        }
+                    }
+                    return "";
+                }
+
+                // Extract specific fields with common variations
+                var invoiceDate = getFieldValue(['invoiceDate', 'invoicedate', 'documentDate', 'documentdate', 'date']);
+                var invoiceNumber = getFieldValue(['invoiceNumber', 'invoicenumber', 'documentNumber', 'documentnumber', 'invoiceId', 'invoiceid', 'number']);
+                var supplierTaxID = getFieldValue(['supplierTaxID', 'suppliertaxid', 'taxID', 'taxid', 'taxNumber', 'taxnumber', 'vendorTaxID', 'vendortaxid']);
+                var supplier = getFieldValue(['supplier', 'vendor', 'vendorCode', 'vendorcode', 'supplierName', 'suppliername']);
+                var currency = getFieldValue(['currency', 'currencyCode', 'currencycode']);
+                var totalAmount = getFieldValue(['totalAmount', 'totalamount', 'grossAmount', 'grossamount', 'total', 'amount']);
+
+                // Open dialog to collect S/4 posting data
+                var oPostDialog = new sap.m.Dialog({
+                    title: "Post Invoice to S/4HANA",
+                    contentWidth: "600px",
+                    content: new sap.m.VBox({
+                        items: [
+                            new sap.m.Label({ text: "Invoice Date (YYYY-MM-DD)", required: true }),
+                            new sap.m.Input({ id: "s4InvoiceDate", value: invoiceDate }),
+
+                            new sap.m.Label({ text: "Invoice Number", required: true }).addStyleClass("sapUiSmallMarginTop"),
+                            new sap.m.Input({ id: "s4InvoiceNumber", value: invoiceNumber }),
+
+                            new sap.m.Label({ text: "Supplier Tax ID", required: true }).addStyleClass("sapUiSmallMarginTop"),
+                            new sap.m.Input({ id: "s4SupplierTaxID", value: supplierTaxID }),
+
+                            new sap.m.Label({ text: "Company Code", required: true }).addStyleClass("sapUiSmallMarginTop"),
+                            new sap.m.Input({ id: "s4CompanyCode", value: "1010" }),
+
+                            new sap.m.Label({ text: "Supplier (Vendor Code)", required: true }).addStyleClass("sapUiSmallMarginTop"),
+                            new sap.m.Input({ id: "s4Supplier", value: supplier }),
+
+                            new sap.m.Label({ text: "Posting Date (YYYY-MM-DD)", required: true }).addStyleClass("sapUiSmallMarginTop"),
+                            new sap.m.Input({ id: "s4PostingDate", value: new Date().toISOString().split('T')[0] }),
+
+                            new sap.m.Label({ text: "Currency", required: true }).addStyleClass("sapUiSmallMarginTop"),
+                            new sap.m.Input({ id: "s4Currency", value: currency || "USD" }),
+
+                            new sap.m.Label({ text: "Gross Amount", required: true }).addStyleClass("sapUiSmallMarginTop"),
+                            new sap.m.Input({ id: "s4GrossAmount", value: totalAmount }),
+
+                            new sap.m.Label({ text: "Payment Terms" }).addStyleClass("sapUiSmallMarginTop"),
+                            new sap.m.Input({ id: "s4PaymentTerms", value: "0001" }),
+
+                            new sap.m.Text({
+                                text: "Line items will be created from extracted data."
+                            }).addStyleClass("sapUiSmallMarginTop")
+                        ]
+                    }).addStyleClass("sapUiSmallMargin"),
+                    beginButton: new sap.m.Button({
+                        text: "Post to S/4HANA",
+                        type: "Emphasized",
+                        press: function() {
+                            var invoiceDate = sap.ui.getCore().byId("s4InvoiceDate").getValue();
+                            var invoiceNumber = sap.ui.getCore().byId("s4InvoiceNumber").getValue();
+                            var supplierTaxID = sap.ui.getCore().byId("s4SupplierTaxID").getValue();
+                            var companyCode = sap.ui.getCore().byId("s4CompanyCode").getValue();
+                            var supplier = sap.ui.getCore().byId("s4Supplier").getValue();
+                            var postingDate = sap.ui.getCore().byId("s4PostingDate").getValue();
+                            var currency = sap.ui.getCore().byId("s4Currency").getValue();
+                            var grossAmount = parseFloat(sap.ui.getCore().byId("s4GrossAmount").getValue());
+                            var paymentTerms = sap.ui.getCore().byId("s4PaymentTerms").getValue();
+
+                            if (!invoiceDate || !invoiceNumber || !supplierTaxID || !companyCode || !supplier || !postingDate || !currency || !grossAmount) {
+                                MessageBox.error("Please fill all required fields.");
+                                return;
+                            }
+
+                            oPostDialog.close();
+
+                            // Convert dates to OData format /Date(timestamp)/
+                            var invoiceDateMs = new Date(invoiceDate).getTime();
+                            var postingDateMs = new Date(postingDate).getTime();
+                            var baselineDateMs = new Date(postingDate).getTime();
+
+                            // Build line items from extracted data
+                            var items = [];
+                            if (currentDoc.lineItems && currentDoc.lineItems.length > 0) {
+                                currentDoc.lineItems.forEach(function(lineItem, idx) {
+                                    var lineFieldMap = {};
+                                    lineItem.fields.forEach(function(field) {
+                                        if (field.dataType === "Number") {
+                                            lineFieldMap[field.name] = field.numberValue;
+                                        } else {
+                                            lineFieldMap[field.name] = field.stringValue;
+                                        }
+                                    });
+
+                                    items.push({
+                                        SupplierInvoiceItem: String((idx + 1) * 10).padStart(6, '0'),
+                                        PurchaseOrder: lineFieldMap.poNumber || fieldMap.poNumber || "",
+                                        PurchaseOrderItem: String((idx + 1) * 10).padStart(5, '0'),
+                                        Plant: "1010",
+                                        TaxCode: "I0",
+                                        DocumentCurrency: currency,
+                                        SupplierInvoiceItemAmount: lineFieldMap.netAmount || 0,
+                                        QuantityInPurchaseOrderUnit: lineFieldMap.quantity || 1,
+                                        PurchaseOrderQuantityUnit: lineFieldMap.unit || "EA",
+                                        SupplierInvoiceItemText: lineFieldMap.description || ""
+                                    });
+                                });
+                            } else {
+                                // Fallback: create single item
+                                items.push({
+                                    SupplierInvoiceItem: "000010",
+                                    PurchaseOrder: fieldMap.poNumber || "",
+                                    PurchaseOrderItem: "00010",
+                                    Plant: "1010",
+                                    TaxCode: "I0",
+                                    DocumentCurrency: currency,
+                                    SupplierInvoiceItemAmount: grossAmount,
+                                    QuantityInPurchaseOrderUnit: 1,
+                                    PurchaseOrderQuantityUnit: "EA",
+                                    SupplierInvoiceItemText: "Invoice " + invoiceNumber
+                                });
+                            }
+
+                            logForDocument(currentDocId, "Posting invoice to S/4HANA...", false);
+
+                            fetch("/invoice/postSupplierInvoiceToS4", {
+                                method: "POST",
+                                headers: {
+                                    "Content-Type": "application/json"
+                                },
+                                body: JSON.stringify({
+                                    invoiceData: {
+                                        CompanyCode: companyCode,
+                                        DocumentDate: "/Date(" + invoiceDateMs + ")/",
+                                        PostingDate: "/Date(" + postingDateMs + ")/",
+                                        SupplierInvoiceIDByInvcgParty: invoiceNumber,
+                                        InvoicingParty: supplier,
+                                        DocumentCurrency: currency,
+                                        InvoiceGrossAmount: grossAmount,
+                                        DueCalculationBaseDate: "/Date(" + baselineDateMs + ")/",
+                                        PaymentTerms: paymentTerms,
+                                        items: items
+                                    }
+                                })
+                            })
+                            .then(response => {
+                                if (!response.ok) {
+                                    return response.json().then(err => {
+                                        throw new Error(err.error?.message || "S/4 posting failed (HTTP " + response.status + ")");
+                                    });
+                                }
+                                return response.json();
+                            })
+                            .then(result => {
+                                logForDocument(currentDocId, "Invoice posted to S/4HANA successfully!", false);
+                                logForDocument(currentDocId, "Supplier Invoice: " + result.SupplierInvoice + ", Fiscal Year: " + result.FiscalYear, false);
+
+                                MessageBox.success("Invoice posted to S/4HANA!\n\nSupplier Invoice: " + result.SupplierInvoice + "\nFiscal Year: " + result.FiscalYear);
+
+                                // Update document status
+                                updateDocument(currentDocId, {
+                                    status: "posted",
+                                    s4InvoiceNumber: result.SupplierInvoice,
+                                    s4FiscalYear: result.FiscalYear
+                                });
+                            })
+                            .catch(error => {
+                                logForDocument(currentDocId, "S/4 posting failed: " + error.message, true);
+                                MessageBox.error("Failed to post invoice to S/4HANA: " + error.message);
+                            });
+                        }
+                    }),
+                    endButton: new sap.m.Button({
+                        text: "Cancel",
+                        press: function() {
+                            oPostDialog.close();
+                        }
+                    }),
+                    afterClose: function() {
+                        oPostDialog.destroy();
+                    }
+                });
+
+                oPostDialog.open();
+            }
+
+            // Update button states based on current document status
+            function updateButtonStates() {
+                var currentDoc = getCurrentDocument();
+
+                if (!currentDoc) {
+                    oGetResultsButton.setEnabled(false);
+                    oCheckStatusButton.setEnabled(false);
+                    oConfirmButton.setEnabled(false);
+                    oPostToS4Button.setEnabled(false);
+                    return;
+                }
+
+                var status = currentDoc.status;
+                var documentId = currentDoc.documentId;
+
+                oCheckStatusButton.setEnabled(!!documentId);
+
+                var canGetResults = !!documentId &&
+                                  (status === "reviewNeeded" ||
+                                   status === "readyForPosting" ||
+                                   status === "confirmed");
+                oGetResultsButton.setEnabled(canGetResults);
+
+                var canConfirm = !!documentId &&
+                               (status === "reviewNeeded" ||
+                                status === "readyForPosting");
+                oConfirmButton.setEnabled(canConfirm);
+
+                var canPostToS4 = status === "confirmed" || status === "posted";
+                oPostToS4Button.setEnabled(canPostToS4);
             }
 
             // Start polling
@@ -893,8 +1503,18 @@
                     clearInterval(pollingInterval);
                 }
 
-                log("Starting automatic polling (every 5 seconds)...");
-                pollingInterval = setInterval(checkStatus, 5000);
+                var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                if (currentDocId) {
+                    logForDocument(currentDocId, "Starting automatic polling (every 5 seconds)...", false);
+                }
+
+                // Use multi-document polling if in list view, single document polling in detail view
+                var view = oDocumentsModel.getProperty("/view");
+                if (view === "list") {
+                    pollingInterval = setInterval(pollAllProcessingDocuments, 5000);
+                } else {
+                    pollingInterval = setInterval(checkStatus, 5000);
+                }
             }
 
             // Stop polling
@@ -902,7 +1522,11 @@
                 if (pollingInterval) {
                     clearInterval(pollingInterval);
                     pollingInterval = null;
-                    log("Polling stopped");
+
+                    var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
+                    if (currentDocId) {
+                        logForDocument(currentDocId, "Polling stopped", false);
+                    }
                 }
             }
 
@@ -914,6 +1538,111 @@
                 press: getResults
             });
 
+            // Post to S4 button
+            var oPostToS4Button = new Button({
+                text: "Post to S/4HANA",
+                icon: "sap-icon://simulate",
+                type: "Emphasized",
+                enabled: false,
+                press: postInvoiceToS4
+            });
+
+            // Documents table for list view
+            var oDocumentsTable = new Table({
+                width: "100%",
+                mode: "SingleSelectMaster",
+                columns: [
+                    new Column({
+                        header: new Label({ text: "File Name" }),
+                        width: "30%"
+                    }),
+                    new Column({
+                        header: new Label({ text: "Status" }),
+                        width: "15%"
+                    }),
+                    new Column({
+                        header: new Label({ text: "Extraction Status" }),
+                        width: "15%"
+                    }),
+                    new Column({
+                        header: new Label({ text: "Uploaded At" }),
+                        width: "20%"
+                    }),
+                    new Column({
+                        header: new Label({ text: "Actions" }),
+                        width: "20%"
+                    })
+                ],
+                items: {
+                    path: "documents>/documents",
+                    template: new ColumnListItem({
+                        type: "Active",
+                        press: function(oEvent) {
+                            var oItem = oEvent.getSource();
+                            var oContext = oItem.getBindingContext("documents");
+                            var docId = oContext.getProperty("id");
+                            switchToDetailView(docId);
+                        },
+                        cells: [
+                            new Text({ text: "{documents>fileName}" }),
+                            new ObjectStatus({
+                                text: "{documents>status}",
+                                state: {
+                                    path: "documents>status",
+                                    formatter: function(status) {
+                                        if (status === "confirmed" || status === "reviewNeeded") return "Success";
+                                        if (status === "failed" || status === "ERROR" || status === "FAILED") return "Error";
+                                        if (status === "pending" || status === "uploading") return "None";
+                                        return "Information";
+                                    }
+                                }
+                            }),
+                            new Text({ text: "{documents>extractionStatus}" }),
+                            new Text({
+                                text: {
+                                    path: "documents>uploadedAt",
+                                    formatter: function(timestamp) {
+                                        if (!timestamp) return "";
+                                        return new Date(timestamp).toLocaleString();
+                                    }
+                                }
+                            }),
+                            new Button({
+                                text: "View Details",
+                                icon: "sap-icon://detail-view",
+                                press: function(oEvent) {
+                                    var oItem = oEvent.getSource().getParent();
+                                    var oContext = oItem.getBindingContext("documents");
+                                    var docId = oContext.getProperty("id");
+                                    switchToDetailView(docId);
+                                }
+                            })
+                        ]
+                    })
+                }
+            }).setModel(oDocumentsModel, "documents");
+
+            // Documents panel for list view
+            var oDocumentsPanel = new Panel({
+                headerText: "Documents",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [
+                        oDocumentsTable,
+                        new HBox({
+                            items: [
+                                new Button({
+                                    text: "Refresh All",
+                                    icon: "sap-icon://refresh",
+                                    press: pollAllProcessingDocuments
+                                })
+                            ]
+                        }).addStyleClass("sapUiSmallMarginTop")
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
             // Load data on init
             loadClients();
             loadSchemaVersions();
@@ -922,7 +1651,7 @@
             var oConfigPanel = new Panel({
                 headerText: "DocAI Configuration",
                 expandable: true,
-                expanded: true,
+                expanded: false,
                 content: new VBox({
                     items: [
                         new Label({ text: "Client ID", required: true }),
@@ -960,7 +1689,7 @@
                         new HBox({
                             width: "100%",
                             items: [
-                                oSchemaVersionSelect.setLayoutData(new sap.m.FlexItemData({ growFactor: 1 })),
+                                oSchemaVersionSelect.setLayoutData(new FlexItemData({ growFactor: 1 })),
                                 oRefreshSchemaVersionsButton.addStyleClass("sapUiTinyMarginBegin")
                             ]
                         }),
@@ -986,6 +1715,13 @@
             }).addStyleClass("sapUiSmallMarginBottom");
 
             // Status panel
+            var oCheckStatusButton = new Button({
+                text: "Check Status",
+                icon: "sap-icon://refresh",
+                enabled: false,
+                press: checkStatus
+            });
+
             var oStatusPanel = new Panel({
                 headerText: "Processing Status",
                 expandable: true,
@@ -996,11 +1732,7 @@
                         oDocumentIdText,
                         new HBox({
                             items: [
-                                new Button({
-                                    text: "Check Status",
-                                    icon: "sap-icon://refresh",
-                                    press: checkStatus
-                                }),
+                                oCheckStatusButton,
                                 oGetResultsButton.addStyleClass("sapUiTinyMarginBegin"),
                                 new Button({
                                     text: "Start Polling",
@@ -1020,21 +1752,12 @@
 
             // Response panel
             var oResponsePanel = new Panel({
-                headerText: "API Responses",
+                headerText: "Document Log",
                 expandable: true,
                 expanded: true,
                 content: new VBox({
                     items: [
-                        oResponseArea,
-                        new HBox({
-                            items: [
-                                new Button({
-                                    text: "Clear Log",
-                                    icon: "sap-icon://delete",
-                                    press: clearLog
-                                })
-                            ]
-                        }).addStyleClass("sapUiSmallMarginTop")
+                        oResponseArea
                     ]
                 }).addStyleClass("sapUiSmallMargin")
             });
@@ -1048,8 +1771,9 @@
                 text: "Confirm",
                 type: "Emphasized",
                 icon: "sap-icon://accept",
+                enabled: false,
                 press: confirmDocument
-            }).addStyleClass("sapUiSmallMarginTop");
+            });
 
             var oExtractionResultsPanel = new Panel({
                 headerText: "Extraction Results",
@@ -1059,7 +1783,13 @@
                 content: new VBox({
                     items: [
                         oExtractionResultsContent,
-                        oConfirmButton
+                        new HBox({
+                            alignItems: "Center",
+                            items: [
+                                oConfirmButton,
+                                oPostToS4Button.addStyleClass("sapUiTinyMarginBegin")
+                            ]
+                        }).addStyleClass("sapUiSmallMarginTop")
                     ]
                 }).addStyleClass("sapUiSmallMargin")
             }).addStyleClass("sapUiSmallMarginBottom");
@@ -1076,34 +1806,65 @@
             }).addStyleClass("sapUiSmallMarginBottom");
 
             // Main content
+            // List View Container
+            var oListViewContainer = new VBox({
+                width: "95%",
+                visible: true,
+                items: [
+                    new Title({
+                        text: "DocAI Multi-Document Workbench",
+                        level: "H2"
+                    }).addStyleClass("sapUiMediumMarginTop"),
+                    new Text({
+                        text: "Upload and process multiple documents with SAP Document Information Extraction API v4"
+                    }).addStyleClass("sapUiTinyMarginTop sapUiSmallMarginBottom"),
+                    oConfigPanel,
+                    oUploadPanel,
+                    oDocumentsPanel
+                ]
+            });
+
+            // Detail View Container
+            var oDetailViewContainer = new VBox({
+                width: "95%",
+                visible: false,
+                items: [
+                    new HBox({
+                        width: "100%",
+                        justifyContent: "SpaceBetween",
+                        alignItems: "Center",
+                        items: [
+                            new Title({
+                                text: "Document Details",
+                                level: "H2"
+                            }),
+                            new Button({
+                                text: "Back to List",
+                                icon: "sap-icon://nav-back",
+                                press: switchToListView
+                            })
+                        ]
+                    }).addStyleClass("sapUiMediumMarginTop sapUiSmallMarginBottom"),
+                    oStatusPanel,
+                    oPdfViewerPanel,
+                    oExtractionResultsPanel,
+                    oResponsePanel
+                ]
+            });
+
+            // Main content
             var oMainContent = new VBox({
                 width: "100%",
                 items: [
-                    new VBox({
-                        width: "95%",
-                        items: [
-                            new Title({
-                                text: "DocAI v4 API Test Console",
-                                level: "H2"
-                            }).addStyleClass("sapUiMediumMarginTop"),
-                            new Text({
-                                text: "Test SAP Document Information Extraction API v4 (OData) integration"
-                            }).addStyleClass("sapUiTinyMarginTop sapUiSmallMarginBottom"),
-                            oConfigPanel,
-                            oUploadPanel,
-                            oStatusPanel,
-                            oPdfViewerPanel,
-                            oExtractionResultsPanel,
-                            oResponsePanel
-                        ]
-                    })
+                    oListViewContainer,
+                    oDetailViewContainer
                 ],
                 alignItems: "Center"
             }).addStyleClass("sapUiContentPadding");
 
             // Create page
             var oPage = new Page({
-                title: "DocAI v4 API Test",
+                title: "DocAI Multi-Document Workbench",
                 showHeader: true,
                 showNavButton: true,
                 navButtonPress: function() {

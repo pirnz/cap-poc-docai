@@ -21,7 +21,9 @@
     "glob": "^10.5.0"
   },
   "scripts": {
-    "start": "cds-serve"
+    "start": "cds-serve",
+    "test:workbench": "node test/test-workbench.js",
+    "test:workbench:headless": "HEADLESS=true node test/test-workbench.js"
   },
   "private": true,
   "cds": {
@@ -30,6 +32,12 @@
         "kind": "odata",
         "credentials": {
           "destination": "docai-destination"
+        }
+      },
+      "s4hana-destination": {
+        "kind": "odata",
+        "credentials": {
+          "destination": "s4hana-destination"
         }
       },
       "[production]": {

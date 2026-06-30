@@ -180,6 +180,37 @@ service InvoiceProcessingService @(path: '/invoice') {
     success: Boolean;
     message: String;
   };
+
+  action postSupplierInvoiceToS4(
+    invoiceData: {
+      CompanyCode: String;
+      DocumentDate: String;
+      PostingDate: String;
+      SupplierInvoiceIDByInvcgParty: String;
+      InvoicingParty: String;
+      DocumentCurrency: String;
+      InvoiceGrossAmount: Decimal;
+      DueCalculationBaseDate: String;
+      PaymentTerms: String;
+      items: array of {
+        SupplierInvoiceItem: String;
+        PurchaseOrder: String;
+        PurchaseOrderItem: String;
+        Plant: String;
+        TaxCode: String;
+        DocumentCurrency: String;
+        SupplierInvoiceItemAmount: Decimal;
+        QuantityInPurchaseOrderUnit: Decimal;
+        PurchaseOrderQuantityUnit: String;
+        SupplierInvoiceItemText: String;
+      };
+    }
+  ) returns {
+    SupplierInvoice: String;
+    FiscalYear: String;
+    success: Boolean;
+    message: String;
+  };
 }
 
 @cds.server.body_parser.limit: '10mb'
