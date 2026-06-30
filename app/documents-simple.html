@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice Documents - Simple</title>
+    <script
+        id="sap-ui-bootstrap"
+        src="https://ui5.sap.com/1.120.0/resources/sap-ui-core.js"
+        data-sap-ui-theme="sap_horizon"
+        data-sap-ui-libs="sap.m,sap.ui.core"
+        data-sap-ui-async="true"
+        data-sap-ui-compatVersion="edge"
+        data-sap-ui-xx-waitForTheme="true"
+    ></script>
+    <script>
+        sap.ui.require([
+            "sap/m/App",
+            "sap/m/Page",
+            "sap/m/Table",
+            "sap/m/Column",
+            "sap/m/ColumnListItem",
+            "sap/m/Text",
+            "sap/m/Title",
+            "sap/m/VBox",
+            "sap/m/Button",
+            "sap/m/MessageToast",
+            "sap/ui/model/odata/v4/ODataModel"
+        ], function (App, Page, Table, Column, ColumnListItem, Text, Title, VBox, Button, MessageToast, ODataModel) {
+
+            // Create OData model
+            var oModel = new ODataModel({
+                serviceUrl: "/invoice/",
+                synchronizationMode: "None",
+                autoExpandSelect: true
+            });
+
+            // Create table
+            var oTable = new Table({
+                width: "100%",
+                columns: [
+                    new Column({
+                        header: new Text({ text: "File Name" }),
+                        width: "30%"
+                    }),
+                    new Column({
+                        header: new Text({ text: "Status" }),
+                        width: "15%"
+                    }),
+                    new Column({
+                        header: new Text({ text: "Extraction Status" }),
+                        width: "20%"
+                    }),
+                    new Column({
+                        header: new Text({ text: "Uploaded At" }),
+                        width: "25%"
+                    }),
+                    new Column({
+                        header: new Text({ text: "Actions" }),
+                        width: "10%"
+                    })
+                ]
+            }).addStyleClass("sapUiSmallMarginTop");
+
+            // Bind items
+            oTable.bindItems({
+                path: "/Documents",
+                parameters: {
+                    $orderby: "uploadedAt desc"
+                },
+                template: new ColumnListItem({
+                    cells: [
+                        new Text({ text: "{fileName}" }),
+                        new Text({ text: "{status}" }),
+                        new Text({ text: "{extractionStatus}" }),
+                        new Text({
+                            text: {
+                                path: 'uploadedAt',
+                                formatter: function(date) {
+                                    if (!date) return '';
+                                    return new Date(date).toLocaleString();
+                                }
+                            }
+                        }),
+                        new Button({
+                            text: "Send to DocAI",
+                            type: "Emphasized",
+                            press: function(oEvent) {
+                                var oContext = oEvent.getSource().getBindingContext();
+                                var sDocId = oContext.getProperty("ID");
+                                var sFileName = oContext.getProperty("fileName");
+
+                                // Call the unbound action
+                                var oModel = oContext.getModel();
+                                var oOperation = oModel.bindContext("/processDocument(...)");
+                                oOperation.setParameter("documentId", sDocId);
+
+                                oOperation.execute().then(function() {
+                                    MessageToast.show("Document '" + sFileName + "' sent to DocAI");
+                                    oContext.refresh();
+                                }).catch(function(oError) {
+                                    MessageToast.show("Error: " + (oError.message || "Failed to send document"));
+                                });
+                            }
+                        })
+                    ]
+                })
+            });
+
+            // Table container with centered layout
+            var oTableContainer = new VBox({
+                width: "100%",
+                alignItems: "Center",
+                items: [
+                    new VBox({
+                        width: "90%",
+                        items: [
+                            new Title({
+                                text: "Invoice Documents",
+                                level: "H3"
+                            }).addStyleClass("sapUiMediumMarginTop sapUiSmallMarginBottom"),
+                            new Text({
+                                text: "View all extracted documents and their processing status"
+                            }).addStyleClass("sapUiTinyMarginBottom"),
+                            oTable
+                        ]
+                    })
+                ]
+            }).addStyleClass("sapUiContentPadding");
+
+            // Create page
+            var oPage = new Page({
+                title: "Invoice Processing - Documents",
+                showHeader: true,
+                showNavButton: true,
+                navButtonPress: function() {
+                    window.location.href = "/";
+                },
+                content: [oTableContainer]
+            });
+
+            // Create app
+            var oApp = new App({
+                pages: [oPage]
+            });
+
+            // Set model and place app
+            oApp.setModel(oModel);
+            oApp.placeAt("content");
+        });
+    </script>
+</head>
+<body class="sapUiBody sapUiSizeCompact">
+    <div id="content"></div>
+</body>
+</html>

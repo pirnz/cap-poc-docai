@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Processing Batches - Simple</title>
+    <script
+        id="sap-ui-bootstrap"
+        src="https://ui5.sap.com/1.120.0/resources/sap-ui-core.js"
+        data-sap-ui-theme="sap_horizon"
+        data-sap-ui-libs="sap.m,sap.ui.core,sap.ui.unified"
+        data-sap-ui-async="true"
+        data-sap-ui-compatVersion="edge"
+        data-sap-ui-xx-waitForTheme="true"
+    ></script>
+    <script>
+        sap.ui.require([
+            "sap/m/App",
+            "sap/m/Page",
+            "sap/m/Table",
+            "sap/m/Column",
+            "sap/m/ColumnListItem",
+            "sap/m/Text",
+            "sap/m/Title",
+            "sap/m/Button",
+            "sap/m/MessageToast",
+            "sap/m/MessageBox",
+            "sap/m/VBox",
+            "sap/m/HBox",
+            "sap/m/Select",
+            "sap/ui/core/Item",
+            "sap/ui/unified/FileUploader",
+            "sap/ui/model/odata/v4/ODataModel",
+            "sap/ui/model/json/JSONModel"
+        ], function (App, Page, Table, Column, ColumnListItem, Text, Title, Button, MessageToast, MessageBox, VBox, HBox, Select, Item, FileUploader, ODataModel, JSONModel) {
+
+            // Create OData model
+            var oModel = new ODataModel({
+                serviceUrl: "/invoice/",
+                synchronizationMode: "None",
+                autoExpandSelect: true
+            });
+
+            // JSON model for schemas
+            var oSchemasModel = new JSONModel({
+                schemas: [],
+                selectedSchemaId: null,
+                loading: false
+            });
+
+            // Load available schemas
+            function loadSchemas() {
+                oSchemasModel.setProperty("/loading", true);
+
+                fetch("/invoice/getAvailableSchemas", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ destination: "docai-destination" })
+                })
+                .then(function(response) {
+                    if (!response.ok) throw new Error("Failed to load schemas");
+                    return response.json();
+                })
+                .then(function(data) {
+                    oSchemasModel.setProperty("/schemas", data.schemas || []);
+                    oSchemasModel.setProperty("/loading", false);
+
+                    // Auto-select first schema if available
+                    if (data.schemas && data.schemas.length > 0) {
+                        oSchemasModel.setProperty("/selectedSchemaId", data.schemas[0].id);
+                    }
+
+                    MessageToast.show("Loaded " + (data.schemas?.length || 0) + " active schemas");
+                })
+                .catch(function(error) {
+                    oSchemasModel.setProperty("/loading", false);
+                    MessageToast.show("Failed to load schemas: " + error.message);
+                });
+            }
+
+            // Schema selector
+            var oSchemaSelect = new Select({
+                width: "100%",
+                enabled: "{schemas>/schemas/length}",
+                selectedKey: "{schemas>/selectedSchemaId}",
+                items: {
+                    path: "schemas>/schemas",
+                    template: new Item({
+                        key: "{schemas>id}",
+                        text: "{schemas>label}"
+                    })
+                }
+            }).setModel(oSchemasModel, "schemas");
+
+            // Refresh schemas button
+            var oRefreshSchemasButton = new Button({
+                icon: "sap-icon://refresh",
+                tooltip: "Refresh schemas",
+                press: loadSchemas
+            });
+
+            // Load schemas on init
+            loadSchemas();
+
+            // File uploader
+            var oFileUploader = new FileUploader({
+                name: "fileUpload",
+                uploadUrl: "/invoice/uploadFile",
+                width: "100%",
+                placeholder: "Choose PDF or EML file...",
+                fileType: ["pdf", "eml"],
+                buttonText: "Browse...",
+                change: function(oEvent) {
+                    var sFileName = oEvent.getParameter("newValue");
+                    if (sFileName) {
+                        MessageToast.show("Selected: " + sFileName);
+                    }
+                }
+            });
+
+            // Upload button
+            var oUploadButton = new Button({
+                text: "Upload File",
+                icon: "sap-icon://upload",
+                type: "Emphasized",
+                width: "200px",
+                press: function() {
+                    var file = oFileUploader.oFileUpload.files[0];
+
+                    if (!file) {
+                        MessageBox.error("Please select a file first");
+                        return;
+                    }
+
+                    var selectedSchemaId = oSchemasModel.getProperty("/selectedSchemaId");
+                    if (!selectedSchemaId) {
+                        MessageBox.error("Please select a schema first");
+                        return;
+                    }
+
+                    MessageToast.show("Uploading " + file.name + "...");
+
+                    // Read file as base64
+                    var reader = new FileReader();
+                    reader.onload = function(e) {
+                        var base64Content = e.target.result.split(',')[1];
+
+                        // Call OData action
+                        fetch("/invoice/uploadFile", {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json"
+                            },
+                            body: JSON.stringify({
+                                fileName: file.name,
+                                fileContent: base64Content,
+                                mimeType: file.type || (file.name.endsWith('.eml') ? 'message/rfc822' : 'application/pdf'),
+                                schemaId: selectedSchemaId
+                            })
+                        })
+                        .then(function(response) {
+                            if (!response.ok) {
+                                throw new Error("Upload failed: " + response.statusText);
+                            }
+                            return response.json();
+                        })
+                        .then(function(data) {
+                            MessageBox.success(
+                                "File uploaded successfully!\n\n" +
+                                "Batch ID: " + data.ID + "\n" +
+                                "Documents extracted: " + data.totalDocuments,
+                                {
+                                    onClose: function() {
+                                        // Refresh table
+                                        oTable.getBinding("items").refresh();
+                                    }
+                                }
+                            );
+                            // Clear file uploader
+                            oFileUploader.clear();
+                        })
+                        .catch(function(error) {
+                            MessageBox.error("Upload failed: " + error.message);
+                        });
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
+
+            // Upload section container
+            var oUploadBox = new VBox({
+                width: "100%",
+                alignItems: "Center",
+                items: [
+                    new VBox({
+                        width: "600px",
+                        items: [
+                            new Title({
+                                text: "Upload Invoice Files",
+                                level: "H3"
+                            }).addStyleClass("sapUiSmallMarginBottom"),
+                            new Text({
+                                text: "Select a PDF invoice or EML file containing invoice attachments"
+                            }).addStyleClass("sapUiTinyMarginBottom"),
+                            new HBox({
+                                width: "100%",
+                                alignItems: "Center",
+                                items: [
+                                    new Text({ text: "Schema:" }).addStyleClass("sapUiTinyMarginEnd"),
+                                    oSchemaSelect,
+                                    oRefreshSchemasButton
+                                ]
+                            }).addStyleClass("sapUiSmallMarginBottom"),
+                            oFileUploader
+                        ]
+                    }).addStyleClass("sapUiSmallMarginBottom"),
+                    oUploadButton
+                ]
+            }).addStyleClass("sapUiContentPadding");
+
+            // Create table
+            var oTable = new Table({
+                width: "100%",
+                columns: [
+                    new Column({
+                        header: new Text({ text: "File Name" }),
+                        width: "30%"
+                    }),
+                    new Column({
+                        header: new Text({ text: "Type" }),
+                        width: "10%"
+                    }),
+                    new Column({
+                        header: new Text({ text: "Status" }),
+                        width: "15%"
+                    }),
+                    new Column({
+                        header: new Text({ text: "Documents" }),
+                        width: "15%",
+                        hAlign: "Center"
+                    }),
+                    new Column({
+                        header: new Text({ text: "Uploaded At" }),
+                        width: "30%"
+                    })
+                ]
+            }).addStyleClass("sapUiSmallMarginTop");
+
+            // Bind items
+            oTable.bindItems({
+                path: "/ProcessingBatches",
+                parameters: {
+                    $orderby: "uploadedAt desc"
+                },
+                template: new ColumnListItem({
+                    cells: [
+                        new Text({ text: "{fileName}" }),
+                        new Text({ text: "{fileType}" }),
+                        new Text({ text: "{status}" }),
+                        new Text({
+                            text: {
+                                parts: ['processedDocuments', 'totalDocuments'],
+                                formatter: function(processed, total) {
+                                    return (processed || 0) + " / " + (total || 0);
+                                }
+                            }
+                        }),
+                        new Text({
+                            text: {
+                                path: 'uploadedAt',
+                                formatter: function(date) {
+                                    if (!date) return '';
+                                    return new Date(date).toLocaleString();
+                                }
+                            }
+                        })
+                    ]
+                })
+            });
+
+            // Table container with max width
+            var oTableContainer = new VBox({
+                width: "100%",
+                alignItems: "Center",
+                items: [
+                    new VBox({
+                        width: "90%",
+                        items: [
+                            new Title({
+                                text: "Processing Batches",
+                                level: "H3"
+                            }).addStyleClass("sapUiMediumMarginTop sapUiSmallMarginBottom"),
+                            oTable
+                        ]
+                    })
+                ]
+            }).addStyleClass("sapUiContentPadding");
+
+            // Create page
+            var oPage = new Page({
+                title: "Invoice Processing - Upload & Manage Batches",
+                showHeader: true,
+                showNavButton: true,
+                navButtonPress: function() {
+                    window.location.href = "/";
+                },
+                content: [oUploadBox, oTableContainer]
+            });
+
+            // Create app
+            var oApp = new App({
+                pages: [oPage]
+            });
+
+            // Set model and place app
+            oApp.setModel(oModel);
+            oApp.placeAt("content");
+        });
+    </script>
+</head>
+<body class="sapUiBody sapUiSizeCompact">
+    <div id="content"></div>
+</body>
+</html>

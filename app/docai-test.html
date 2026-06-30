@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DocAI v4 API Test</title>
+    <script
+        id="sap-ui-bootstrap"
+        src="https://ui5.sap.com/1.120.0/resources/sap-ui-core.js"
+        data-sap-ui-theme="sap_horizon"
+        data-sap-ui-libs="sap.m,sap.ui.core,sap.ui.unified"
+        data-sap-ui-async="true"
+        data-sap-ui-compatVersion="edge"
+        data-sap-ui-xx-waitForTheme="true"
+    ></script>
+    <script>
+        sap.ui.require([
+            "sap/m/App",
+            "sap/m/Page",
+            "sap/m/VBox",
+            "sap/m/HBox",
+            "sap/m/Title",
+            "sap/m/Label",
+            "sap/m/Text",
+            "sap/m/Input",
+            "sap/m/TextArea",
+            "sap/m/Button",
+            "sap/m/MessageToast",
+            "sap/m/MessageBox",
+            "sap/m/ProgressIndicator",
+            "sap/m/Panel",
+            "sap/ui/core/Icon",
+            "sap/ui/unified/FileUploader",
+            "sap/m/ObjectStatus",
+            "sap/m/ComboBox",
+            "sap/m/Select",
+            "sap/ui/core/Item",
+            "sap/ui/model/json/JSONModel",
+            "sap/ui/core/HTML"
+        ], function (App, Page, VBox, HBox, Title, Label, Text, Input, TextArea, Button, MessageToast, MessageBox, ProgressIndicator, Panel, Icon, FileUploader, ObjectStatus, ComboBox, Select, Item, JSONModel, HTML) {
+
+            // State variables
+            var currentDocumentId = null;
+            var currentSchemaVersionId = null;
+            var currentDocumentStatus = null;
+            var pollingInterval = null;
+            var schemaFields = {};
+            var documentEntities = { headerFields: [], lineItems: [], documentConfidence: 0 };
+            var editedEntities = {};
+            var pdfData = null;
+
+            // Hardcoded destination
+            var DESTINATION = "docai-destination";
+
+            // JSON model for clients
+            var oClientsModel = new JSONModel({
+                clients: [],
+                selectedClient: null,
+                loading: false
+            });
+
+            // JSON model for schema versions
+            var oSchemaVersionsModel = new JSONModel({
+                schemaVersions: [],
+                selectedSchemaVersionId: null,
+                loading: false
+            });
+
+            // Load available clients from schemas
+            function loadClients() {
+                oClientsModel.setProperty("/loading", true);
+
+                fetch("/invoice/getSchemaClients", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ destination: DESTINATION })
+                })
+                .then(function(response) {
+                    if (!response.ok) throw new Error("Failed to load clients");
+                    return response.json();
+                })
+                .then(function(data) {
+                    var uniqueClients = data.clients || [];
+                    oClientsModel.setProperty("/clients", uniqueClients);
+                    oClientsModel.setProperty("/loading", false);
+
+                    // Auto-select "default" if available
+                    if (uniqueClients.indexOf("default") !== -1) {
+                        oClientsModel.setProperty("/selectedClient", "default");
+                        oClientComboBox.setSelectedKey("default");
+                    } else if (uniqueClients.length > 0) {
+                        oClientsModel.setProperty("/selectedClient", uniqueClients[0]);
+                        oClientComboBox.setSelectedKey(uniqueClients[0]);
+                    }
+
+                    MessageToast.show("Loaded " + uniqueClients.length + " clients");
+                })
+                .catch(function(error) {
+                    oClientsModel.setProperty("/loading", false);
+                    MessageToast.show("Failed to load clients: " + error.message);
+                });
+            }
+
+            // Load available schema versions
+            function loadSchemaVersions() {
+                oSchemaVersionsModel.setProperty("/loading", true);
+
+                fetch("/invoice/getSchemaVersionsList", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ destination: DESTINATION })
+                })
+                .then(function(response) {
+                    if (!response.ok) throw new Error("Failed to load schema versions");
+                    return response.json();
+                })
+                .then(function(data) {
+                    var schemaVersions = (data.schemaVersions || []).map(function(sv) {
+                        return JSON.parse(sv);
+                    });
+                    oSchemaVersionsModel.setProperty("/schemaVersions", schemaVersions);
+                    oSchemaVersionsModel.setProperty("/loading", false);
+
+                    // Auto-select first schema version if available
+                    if (schemaVersions.length > 0) {
+                        var firstId = schemaVersions[0].ID;
+                        oSchemaVersionsModel.setProperty("/selectedSchemaVersionId", firstId);
+                        oSchemaVersionSelect.setSelectedKey(firstId);
+                        currentSchemaVersionId = firstId;
+                    }
+
+                    MessageToast.show("Loaded " + schemaVersions.length + " active schema versions");
+                })
+                .catch(function(error) {
+                    oSchemaVersionsModel.setProperty("/loading", false);
+                    MessageToast.show("Failed to load schema versions: " + error.message);
+                });
+            }
+
+            // Client ComboBox
+            var oClientComboBox = new ComboBox({
+                width: "100%",
+                placeholder: "Select or enter client ID",
+                selectedKey: "{clients>/selectedClient}",
+                change: function(oEvent) {
+                    var value = oEvent.getParameter("value");
+                    oClientsModel.setProperty("/selectedClient", value);
+                },
+                items: {
+                    path: "clients>/clients",
+                    template: new Item({
+                        key: "{clients>}",
+                        text: "{clients>}"
+                    })
+                }
+            }).setModel(oClientsModel, "clients");
+
+            // Refresh clients button
+            var oRefreshClientsButton = new Button({
+                icon: "sap-icon://refresh",
+                tooltip: "Refresh clients",
+                press: loadClients
+            });
+
+            // Schema version selector
+            var oSchemaVersionSelect = new Select({
+                width: "100%",
+                selectedKey: "{schemaVersions>/selectedSchemaVersionId}",
+                change: function(oEvent) {
+                    var selectedKey = oEvent.getParameter("selectedItem").getKey();
+                    oSchemaVersionsModel.setProperty("/selectedSchemaVersionId", selectedKey);
+                    currentSchemaVersionId = selectedKey;
+                },
+                items: {
+                    path: "schemaVersions>/schemaVersions",
+                    template: new Item({
+                        key: "{schemaVersions>ID}",
+                        text: "{schemaVersions>label} (v{schemaVersions>version})"
+                    })
+                }
+            }).setModel(oSchemaVersionsModel, "schemaVersions");
+
+            // Refresh schema versions button
+            var oRefreshSchemaVersionsButton = new Button({
+                icon: "sap-icon://refresh",
+                tooltip: "Refresh schema versions",
+                press: loadSchemaVersions
+            });
+
+            // OCR Engine input
+            var oOcrEngineInput = new Input({
+                value: "Document",
+                placeholder: "Document or SceneText",
+                width: "100%"
+            });
+
+            // File uploader
+            var oFileUploader = new FileUploader({
+                name: "pdfFile",
+                uploadUrl: "upload",
+                placeholder: "Choose PDF file...",
+                fileType: ["pdf"],
+                mimeType: ["application/pdf"],
+                buttonText: "Browse",
+                width: "100%",
+                change: function(oEvent) {
+                    var fileName = oEvent.getParameter("newValue");
+                    if (fileName) {
+                        MessageToast.show("File selected: " + fileName);
+                    }
+                }
+            });
+
+            // Progress indicator
+            var oProgress = new ProgressIndicator({
+                visible: false,
+                percentValue: 0,
+                displayValue: "Idle",
+                width: "100%",
+                state: "None"
+            });
+
+            // Response display
+            var oResponseArea = new TextArea({
+                width: "100%",
+                rows: 20,
+                editable: false,
+                placeholder: "API responses will appear here..."
+            });
+
+            // Document ID display
+            var oDocumentIdText = new Text({
+                text: ""
+            }).addStyleClass("sapUiSmallMarginTop");
+
+            // Log function
+            function log(message, isError) {
+                var timestamp = new Date().toLocaleTimeString();
+                var prefix = isError ? "❌ ERROR" : "✅";
+                var line = `[${timestamp}] ${prefix} ${message}\n`;
+                oResponseArea.setValue(oResponseArea.getValue() + line);
+            }
+
+            function logJson(label, data) {
+                var timestamp = new Date().toLocaleTimeString();
+                var line = `[${timestamp}] 📋 ${label}:\n${JSON.stringify(data, null, 2)}\n\n`;
+                oResponseArea.setValue(oResponseArea.getValue() + line);
+            }
+
+            function clearLog() {
+                oResponseArea.setValue("");
+                oDocumentIdText.setText("");
+                currentDocumentId = null;
+                currentSchemaVersionId = oSchemaVersionsModel.getProperty("/selectedSchemaVersionId");
+                currentDocumentStatus = null;
+                schemaFields = {};
+                documentEntities = { headerFields: [], lineItems: [], documentConfidence: 0 };
+                editedEntities = {};
+                updateGetResultsButton();
+                oExtractionResultsPanel.setVisible(false);
+            }
+
+            // Test API connection
+            function testConnection() {
+                clearLog();
+                oProgress.setVisible(true);
+                oProgress.setState("Information");
+                oProgress.setDisplayValue("Testing connection...");
+
+                fetch("/invoice/testDocAI", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        destination: DESTINATION
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        log("Connection test failed: " + data.error.message, true);
+                        oProgress.setVisible(false);
+                        MessageBox.error("Connection test failed: " + data.error.message);
+                    } else {
+                        log("Connection test completed");
+                        logJson("Response", data);
+                        oProgress.setVisible(false);
+                        MessageToast.show("Connection test completed");
+                    }
+                })
+                .catch(error => {
+                    log("Connection test failed: " + error.message, true);
+                    oProgress.setVisible(false);
+                    MessageBox.error("Connection test failed: " + error.message);
+                });
+            }
+
+            // Upload document to DocAI
+            function uploadDocument() {
+                var domRef = oFileUploader.getDomRef();
+                var file = domRef.querySelector('input[type="file"]').files[0];
+
+                if (!file) {
+                    MessageBox.warning("Please select a PDF file first");
+                    return;
+                }
+
+                var selectedSchemaVersionId = oSchemaVersionsModel.getProperty("/selectedSchemaVersionId");
+                var selectedClient = oClientComboBox.getValue() || oClientsModel.getProperty("/selectedClient");
+
+                if (!selectedSchemaVersionId) {
+                    MessageBox.warning("Please select a schema version");
+                    return;
+                }
+
+                if (!selectedClient) {
+                    MessageBox.warning("Please enter or select a client ID");
+                    return;
+                }
+
+                clearLog();
+                log("Starting document upload: " + file.name);
+                oProgress.setVisible(true);
+                oProgress.setPercentValue(10);
+                oProgress.setState("Information");
+                oProgress.setDisplayValue("Reading file...");
+
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    var fileContent = e.target.result.split(',')[1];
+
+                    oProgress.setPercentValue(30);
+                    oProgress.setDisplayValue("Uploading to DocAI...");
+
+                    var requestData = {
+                        destination: DESTINATION,
+                        schemaVersion_ID: selectedSchemaVersionId,
+                        clientId: selectedClient,
+                        ocrEngine: oOcrEngineInput.getValue() || undefined,
+                        fileName: file.name,
+                        fileContent: fileContent
+                    };
+
+                    log("Sending to DocAI via destination: " + requestData.destination);
+                    log("Schema Version ID: " + requestData.schemaVersion_ID);
+                    log("Client ID: " + requestData.clientId);
+
+                    currentSchemaVersionId = selectedSchemaVersionId;
+
+                    fetch("/invoice/submitToDocAI", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify(requestData)
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            throw new Error(data.error.message || "Upload failed");
+                        }
+
+                        currentDocumentId = data.documentId;
+                        log("Document uploaded successfully!");
+                        log("Document ID: " + currentDocumentId);
+                        oDocumentIdText.setText("Document ID: " + currentDocumentId);
+                        logJson("Response", data);
+
+                        oProgress.setPercentValue(50);
+                        oProgress.setState("Success");
+                        oProgress.setDisplayValue("Document uploaded");
+
+                        MessageToast.show("Document uploaded: " + currentDocumentId);
+
+                        // Auto-start polling
+                        setTimeout(function() {
+                            startPolling();
+                        }, 2000);
+                    })
+                    .catch(error => {
+                        log("Upload failed: " + error.message, true);
+                        oProgress.setVisible(false);
+                        MessageBox.error("Upload failed: " + error.message);
+                    });
+                };
+
+                reader.readAsDataURL(file);
+            }
+
+            // Update Get Results button enabled state
+            function updateGetResultsButton() {
+                var enabled = currentDocumentId !== null &&
+                              (currentDocumentStatus === "reviewNeeded" ||
+                               currentDocumentStatus === "readyForPosting" ||
+                               currentDocumentStatus === "confirmed");
+                oGetResultsButton.setEnabled(enabled);
+            }
+
+            // Check document status
+            function checkStatus() {
+                if (!currentDocumentId) {
+                    MessageBox.warning("No document ID. Please upload a document first.");
+                    return;
+                }
+
+                log("Checking status for: " + currentDocumentId);
+
+                fetch("/invoice/getDocAIStatus", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        destination: DESTINATION,
+                        documentId: currentDocumentId
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    currentDocumentStatus = data.status;
+                    log("Status retrieved: " + data.status);
+                    logJson("Status Response", data);
+
+                    updateGetResultsButton();
+
+                    if (data.status === "DONE" || data.status === "SUCCEEDED" || data.status === "reviewNeeded") {
+                        oProgress.setPercentValue(100);
+                        oProgress.setState("Success");
+                        oProgress.setDisplayValue("Processing complete!");
+                        stopPolling();
+                        MessageBox.success("Document processing completed!");
+                    } else if (data.status === "FAILED" || data.status === "ERROR") {
+                        oProgress.setState("Error");
+                        oProgress.setDisplayValue("Processing failed");
+                        stopPolling();
+                        MessageBox.error("Document processing failed");
+                    } else {
+                        oProgress.setPercentValue(70);
+                        oProgress.setDisplayValue("Processing: " + data.status);
+                    }
+                })
+                .catch(error => {
+                    log("Status check failed: " + error.message, true);
+                    MessageToast.show("Status check failed");
+                });
+            }
+
+            // Get confidence state
+            function getConfidenceState(confidence) {
+                if (confidence < 0.5) return "Error";
+                if (confidence < 0.8) return "Warning";
+                return "Success";
+            }
+
+            // Fetch schema field definitions
+            function fetchSchemaFields(schemaVersionId) {
+                log("Fetching schema fields for version ID: " + schemaVersionId);
+
+                return fetch("/invoice/getSchemaFields", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        destination: DESTINATION,
+                        schemaVersionId: schemaVersionId
+                    })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        schemaFields = {};
+                        var fields = (data.fields || []).map(f => JSON.parse(f));
+                        if (fields.length > 0) {
+                            fields.forEach(field => {
+                                schemaFields[field.name] = {
+                                    label: field.label || field.name,
+                                    dataType: field.dataType,
+                                    ID: field.ID
+                                };
+                            });
+                            log("Loaded " + fields.length + " schema field definitions");
+                        }
+                        return schemaFields;
+                    })
+                    .catch(error => {
+                        log("Failed to fetch schema fields: " + error.message, true);
+                        throw error;
+                    });
+            }
+
+            // Fetch document extraction results
+            function fetchDocumentEntities(documentId) {
+                log("Fetching document entities for ID: " + documentId);
+
+                return fetch("/invoice/getDocAIResults", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        destination: DESTINATION,
+                        documentId: documentId
+                    })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            throw new Error(data.error.message || "Failed to fetch results");
+                        }
+
+                        // Store PDF file data
+                        if (data.fileData) {
+                            pdfData = data.fileData;
+                            log("PDF file data loaded");
+                        }
+
+                        // New structured format
+                        if (data.headerFields && data.lineItems) {
+                            log("Loaded " + data.headerFields.length + " header fields and " + data.lineItems.length + " line items");
+                            return {
+                                headerFields: data.headerFields,
+                                lineItems: data.lineItems,
+                                documentConfidence: data.documentConfidence
+                            };
+                        }
+
+                        log("No structured data found in response", true);
+                        return { headerFields: [], lineItems: [], documentConfidence: 0 };
+                    })
+                    .catch(error => {
+                        log("Failed to fetch document entities: " + error.message, true);
+                        throw error;
+                    });
+            }
+
+            // Build extraction results content
+            function buildResultsContent() {
+                oExtractionResultsContent.destroyItems();
+                editedEntities = {};
+
+                // Use document confidence from backend
+                var docConfidence = documentEntities.documentConfidence || 0;
+                var docConfidenceText = Math.round(docConfidence * 100) + "%";
+                var docConfidenceState = getConfidenceState(docConfidence);
+
+                var oDocConfidenceStatus = new ObjectStatus({
+                    text: "Document Confidence: " + docConfidenceText,
+                    state: docConfidenceState
+                });
+
+                oExtractionResultsContent.addItem(oDocConfidenceStatus);
+                oExtractionResultsContent.addItem(new Text({ text: "" }).addStyleClass("sapUiSmallMarginTop"));
+
+                var headerFields = documentEntities.headerFields || [];
+                var lineItems = documentEntities.lineItems || [];
+
+                // Render header fields in a panel
+                if (headerFields.length > 0) {
+                    var oHeaderPanel = new Panel({
+                        headerText: "Header Information (" + headerFields.length + " fields)",
+                        expandable: true,
+                        expanded: true,
+                        content: new VBox({ items: [] })
+                    }).addStyleClass("sapUiSmallMarginTop");
+
+                    var oHeaderContent = oHeaderPanel.getContent()[0];
+
+                    headerFields.forEach(function(entity) {
+                        var fieldDef = schemaFields[entity.name] || {};
+                        var fieldLabel = entity.label || fieldDef.label || entity.name;
+                        var dataType = entity.dataType || fieldDef.dataType;
+
+                        var fieldValue = "";
+                        if (dataType === "Number") {
+                            fieldValue = entity.numberValue !== null && entity.numberValue !== undefined ? String(entity.numberValue) : "";
+                        } else if (dataType === "Date") {
+                            fieldValue = entity.dateValue || "";
+                        } else {
+                            fieldValue = entity.stringValue || "";
+                        }
+
+                        var oFieldInput = new Input({
+                            value: fieldValue,
+                            width: "100%",
+                            change: function(oEvent) {
+                                var newValue = oEvent.getParameter("value");
+                                editedEntities[entity.ID] = {
+                                    entity: entity,
+                                    originalValue: fieldValue,
+                                    editedValue: newValue,
+                                    modified: newValue !== fieldValue
+                                };
+                            }
+                        });
+
+                        var confidence = entity.confidence || 0;
+                        var confidenceText = Math.round(confidence * 100) + "%";
+                        var confidenceState = getConfidenceState(confidence);
+
+                        var oConfidenceStatus = new ObjectStatus({
+                            text: confidenceText,
+                            state: confidenceState,
+                            width: "80px"
+                        });
+
+                        var oFieldRow = new HBox({
+                            width: "100%",
+                            alignItems: "Center",
+                            items: [
+                                new Label({
+                                    text: fieldLabel,
+                                    width: "200px"
+                                }).addStyleClass("sapUiSmallMarginEnd"),
+                                oFieldInput.setLayoutData(new sap.m.FlexItemData({ growFactor: 1 })).addStyleClass("sapUiSmallMarginEnd"),
+                                oConfidenceStatus
+                            ]
+                        }).addStyleClass("sapUiTinyMarginTop");
+
+                        oHeaderContent.addItem(oFieldRow);
+                    });
+
+                    oExtractionResultsContent.addItem(oHeaderPanel);
+                }
+
+                // Render line items as a table
+                if (lineItems.length > 0) {
+                    var oLineItemsPanel = new Panel({
+                        headerText: "Line Items (" + lineItems.length + " rows)",
+                        expandable: true,
+                        expanded: true,
+                        content: new VBox({ items: [] })
+                    }).addStyleClass("sapUiSmallMarginTop");
+
+                    var oLineItemsContent = oLineItemsPanel.getContent()[0];
+
+                    // Create table header
+                    var oHeaderRow = new HBox({
+                        width: "100%",
+                        items: [
+                            new Label({ text: "#", width: "40px" }).addStyleClass("sapUiSmallMarginEnd"),
+                            new Label({ text: "Description", width: "300px" }).addStyleClass("sapUiSmallMarginEnd"),
+                            new Label({ text: "Qty", width: "80px" }).addStyleClass("sapUiSmallMarginEnd"),
+                            new Label({ text: "Unit Price", width: "120px" }).addStyleClass("sapUiSmallMarginEnd"),
+                            new Label({ text: "Net Amount", width: "120px" }).addStyleClass("sapUiSmallMarginEnd"),
+                            new Label({ text: "Confidence", width: "80px" })
+                        ]
+                    }).addStyleClass("sapUiSmallMarginTop");
+
+                    oLineItemsContent.addItem(oHeaderRow);
+
+                    // Create table rows
+                    lineItems.forEach(function(lineItem) {
+                        var occurrence = lineItem.occurrence;
+                        var fields = lineItem.fields || [];
+
+                        // Build field map by name
+                        var fieldMap = {};
+                        fields.forEach(function(f) {
+                            fieldMap[f.name] = f;
+                        });
+
+                        var columnNames = ["description", "quantity", "unitPrice", "netAmount"];
+                        var cells = [
+                            new Text({ text: occurrence, width: "40px" })
+                        ];
+
+                        var avgConfidence = 0;
+                        var confidenceCount = 0;
+
+                        columnNames.forEach(function(colName) {
+                            var entity = fieldMap[colName];
+                            var width = colName === "description" ? "300px" : (colName === "quantity" ? "80px" : "120px");
+
+                            if (entity) {
+                                var dataType = entity.dataType;
+
+                                var fieldValue = "";
+                                if (dataType === "Number") {
+                                    fieldValue = entity.numberValue !== null && entity.numberValue !== undefined ? String(entity.numberValue) : "";
+                                } else if (dataType === "Date") {
+                                    fieldValue = entity.dateValue || "";
+                                } else {
+                                    fieldValue = entity.stringValue || "";
+                                }
+
+                                var oFieldInput = new Input({
+                                    value: fieldValue,
+                                    width: width,
+                                    change: (function(e) {
+                                        return function(oEvent) {
+                                            var newValue = oEvent.getParameter("value");
+                                            editedEntities[e.ID] = {
+                                                entity: e,
+                                                originalValue: fieldValue,
+                                                editedValue: newValue,
+                                                modified: newValue !== fieldValue
+                                            };
+                                        };
+                                    })(entity)
+                                });
+
+                                cells.push(oFieldInput);
+
+                                if (entity.confidence !== null && entity.confidence !== undefined) {
+                                    avgConfidence += entity.confidence;
+                                    confidenceCount++;
+                                }
+                            } else {
+                                cells.push(new Input({ value: "", width: width, enabled: false }));
+                            }
+                        });
+
+                        // Calculate average confidence for this line
+                        var lineConfidence = confidenceCount > 0 ? avgConfidence / confidenceCount : 0;
+                        var lineConfidenceText = Math.round(lineConfidence * 100) + "%";
+                        var lineConfidenceState = getConfidenceState(lineConfidence);
+
+                        cells.push(new ObjectStatus({
+                            text: lineConfidenceText,
+                            state: lineConfidenceState,
+                            width: "80px"
+                        }));
+
+                        var oLineRow = new HBox({
+                            width: "100%",
+                            alignItems: "Center",
+                            items: cells.map(function(cell, idx) {
+                                return cell.addStyleClass(idx < cells.length - 1 ? "sapUiSmallMarginEnd" : "");
+                            })
+                        }).addStyleClass("sapUiTinyMarginTop");
+
+                        oLineItemsContent.addItem(oLineRow);
+                    });
+
+                    oExtractionResultsContent.addItem(oLineItemsPanel);
+                }
+            }
+
+            // Get extraction results
+            function getResults() {
+                if (!currentDocumentId) {
+                    MessageBox.warning("No document ID. Please upload a document first.");
+                    return;
+                }
+
+                if (!currentSchemaVersionId) {
+                    MessageBox.warning("No schema version ID available.");
+                    return;
+                }
+
+                log("Fetching extraction results...");
+
+                oExtractionResultsPanel.setVisible(false);
+                oPdfViewerPanel.setVisible(false);
+                pdfData = null; // Reset PDF data
+
+                fetchSchemaFields(currentSchemaVersionId)
+                    .then(function() {
+                        return fetchDocumentEntities(currentDocumentId);
+                    })
+                    .then(function(results) {
+                        documentEntities = results;
+
+                        if (!results || (!results.headerFields || results.headerFields.length === 0) && (!results.lineItems || results.lineItems.length === 0)) {
+                            MessageBox.information("No extraction results found for this document.");
+                            return;
+                        }
+
+                        buildResultsContent();
+                        oExtractionResultsPanel.setVisible(true);
+
+                        // Display PDF if available - pdfData is set in fetchDocumentEntities
+                        if (pdfData) {
+                            log("Displaying PDF in viewer...");
+                            displayPdf(pdfData);
+                        } else {
+                            log("No PDF data available to display");
+                        }
+
+                        log("Extraction results displayed successfully");
+                        MessageToast.show("Extraction results loaded");
+                    })
+                    .catch(function(error) {
+                        log("Failed to get results: " + error.message, true);
+                        MessageBox.error("Failed to get results: " + error.message);
+                    });
+            }
+
+            // Display PDF in viewer
+            function displayPdf(base64Data) {
+                if (!base64Data) {
+                    log("No PDF data available", true);
+                    return;
+                }
+
+                // Make panel visible first to ensure iframe is rendered
+                oPdfViewerPanel.setVisible(true);
+
+                // Use setTimeout to ensure iframe is in DOM and ready
+                setTimeout(function() {
+                    var pdfViewer = document.getElementById("pdfViewer");
+                    if (pdfViewer) {
+                        try {
+                            pdfViewer.src = "data:application/pdf;base64," + base64Data;
+                            log("PDF loaded in viewer");
+                        } catch (error) {
+                            log("Failed to load PDF: " + error.message, true);
+                        }
+                    } else {
+                        log("PDF viewer iframe not found in DOM", true);
+                    }
+                }, 100);
+            }
+
+            // Confirm document
+            function confirmDocument() {
+                if (!currentDocumentId) {
+                    MessageBox.warning("No document ID available.");
+                    return;
+                }
+
+                log("Starting confirmation workflow...");
+
+                // Check if there are edited entities
+                var modifiedEntityIds = Object.keys(editedEntities).filter(id => editedEntities[id].modified);
+
+                // Prepare entities array for the action
+                var entitiesPayload = modifiedEntityIds.map(entityId => {
+                    var editInfo = editedEntities[entityId];
+                    var entity = editInfo.entity;
+
+                    var entityUpdate = {
+                        entityId: entity.ID,
+                        stringValue: null,
+                        numberValue: null,
+                        dateValue: null
+                    };
+
+                    // Set the appropriate value field based on dataType
+                    if (entity.dataType === "Number") {
+                        entityUpdate.numberValue = parseFloat(editInfo.editedValue) || 0;
+                    } else if (entity.dataType === "Date") {
+                        entityUpdate.dateValue = editInfo.editedValue;
+                    } else {
+                        entityUpdate.stringValue = editInfo.editedValue;
+                    }
+
+                    return entityUpdate;
+                });
+
+                if (entitiesPayload.length > 0) {
+                    log("Updating " + entitiesPayload.length + " edited entities and confirming...");
+                } else {
+                    log("No edited entities, confirming document...");
+                }
+
+                // Call the new CAP action that updates and confirms in one go
+                fetch("/invoice/updateAndConfirmDocument", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        documentId: currentDocumentId,
+                        entities: entitiesPayload,
+                        useForInstantLearning: false
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => {
+                            throw new Error(err.error?.message || "Update and confirmation failed (HTTP " + response.status + ")");
+                        });
+                    }
+                    return response.json();
+                })
+                .then(result => {
+                    log("Document updated and confirmed successfully!");
+                    logJson("Confirmation Result", result);
+                    MessageBox.success("Document updated and confirmed successfully!");
+
+                    // Update status display
+                    oProgress.setState("Success");
+                    oProgress.setDisplayValue("Confirmed");
+                })
+                .catch(error => {
+                    log("Confirmation failed: " + error.message, true);
+                    MessageBox.error("Confirmation failed: " + error.message);
+                });
+            }
+
+            // Start polling
+            function startPolling() {
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                }
+
+                log("Starting automatic polling (every 5 seconds)...");
+                pollingInterval = setInterval(checkStatus, 5000);
+            }
+
+            // Stop polling
+            function stopPolling() {
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                    pollingInterval = null;
+                    log("Polling stopped");
+                }
+            }
+
+            // Get Results button (must be declared before used)
+            var oGetResultsButton = new Button({
+                text: "Get Results",
+                icon: "sap-icon://download",
+                enabled: false,
+                press: getResults
+            });
+
+            // Load data on init
+            loadClients();
+            loadSchemaVersions();
+
+            // Configuration panel
+            var oConfigPanel = new Panel({
+                headerText: "DocAI Configuration",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [
+                        new Label({ text: "Client ID", required: true }),
+                        new HBox({
+                            items: [
+                                oClientComboBox,
+                                oRefreshClientsButton.addStyleClass("sapUiTinyMarginBegin")
+                            ],
+                            width: "100%"
+                        }),
+                        new Text({
+                            text: "Select from list or enter custom client ID"
+                        }).addStyleClass("sapUiTinyMarginTop"),
+                        new HBox({
+                            items: [
+                                new Button({
+                                    text: "Test Connection",
+                                    icon: "sap-icon://validate",
+                                    press: testConnection
+                                })
+                            ]
+                        }).addStyleClass("sapUiSmallMarginTop")
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Upload panel
+            var oUploadPanel = new Panel({
+                headerText: "Document Upload",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [
+                        new Label({ text: "Schema Version", required: true }),
+                        new HBox({
+                            width: "100%",
+                            items: [
+                                oSchemaVersionSelect.setLayoutData(new sap.m.FlexItemData({ growFactor: 1 })),
+                                oRefreshSchemaVersionsButton.addStyleClass("sapUiTinyMarginBegin")
+                            ]
+                        }),
+                        new Label({ text: "OCR Engine" }).addStyleClass("sapUiSmallMarginTop"),
+                        oOcrEngineInput,
+                        new Text({
+                            text: "Allowed values: 'Document' or 'SceneText'"
+                        }).addStyleClass("sapUiTinyMarginTop"),
+                        new Label({ text: "Select PDF File", required: true }).addStyleClass("sapUiSmallMarginTop"),
+                        oFileUploader,
+                        new HBox({
+                            items: [
+                                new Button({
+                                    text: "Upload to DocAI",
+                                    type: "Emphasized",
+                                    icon: "sap-icon://upload",
+                                    press: uploadDocument
+                                })
+                            ]
+                        }).addStyleClass("sapUiSmallMarginTop")
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Status panel
+            var oStatusPanel = new Panel({
+                headerText: "Processing Status",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [
+                        oProgress,
+                        oDocumentIdText,
+                        new HBox({
+                            items: [
+                                new Button({
+                                    text: "Check Status",
+                                    icon: "sap-icon://refresh",
+                                    press: checkStatus
+                                }),
+                                oGetResultsButton.addStyleClass("sapUiTinyMarginBegin"),
+                                new Button({
+                                    text: "Start Polling",
+                                    icon: "sap-icon://play",
+                                    press: startPolling
+                                }).addStyleClass("sapUiTinyMarginBegin"),
+                                new Button({
+                                    text: "Stop Polling",
+                                    icon: "sap-icon://stop",
+                                    press: stopPolling
+                                }).addStyleClass("sapUiTinyMarginBegin")
+                            ]
+                        }).addStyleClass("sapUiSmallMarginTop")
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Response panel
+            var oResponsePanel = new Panel({
+                headerText: "API Responses",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [
+                        oResponseArea,
+                        new HBox({
+                            items: [
+                                new Button({
+                                    text: "Clear Log",
+                                    icon: "sap-icon://delete",
+                                    press: clearLog
+                                })
+                            ]
+                        }).addStyleClass("sapUiSmallMarginTop")
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            });
+
+            // Extraction Results panel
+            var oExtractionResultsContent = new VBox({
+                items: []
+            }).addStyleClass("sapUiSmallMargin");
+
+            var oConfirmButton = new Button({
+                text: "Confirm",
+                type: "Emphasized",
+                icon: "sap-icon://accept",
+                press: confirmDocument
+            }).addStyleClass("sapUiSmallMarginTop");
+
+            var oExtractionResultsPanel = new Panel({
+                headerText: "Extraction Results",
+                expandable: true,
+                expanded: true,
+                visible: false,
+                content: new VBox({
+                    items: [
+                        oExtractionResultsContent,
+                        oConfirmButton
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // PDF Viewer panel
+            var oPdfViewerPanel = new Panel({
+                headerText: "PDF Document",
+                expandable: true,
+                expanded: true,
+                visible: false,
+                content: new HTML({
+                    content: '<iframe id="pdfViewer" style="width:100%; height:800px; border:none;"></iframe>'
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Main content
+            var oMainContent = new VBox({
+                width: "100%",
+                items: [
+                    new VBox({
+                        width: "95%",
+                        items: [
+                            new Title({
+                                text: "DocAI v4 API Test Console",
+                                level: "H2"
+                            }).addStyleClass("sapUiMediumMarginTop"),
+                            new Text({
+                                text: "Test SAP Document Information Extraction API v4 (OData) integration"
+                            }).addStyleClass("sapUiTinyMarginTop sapUiSmallMarginBottom"),
+                            oConfigPanel,
+                            oUploadPanel,
+                            oStatusPanel,
+                            oPdfViewerPanel,
+                            oExtractionResultsPanel,
+                            oResponsePanel
+                        ]
+                    })
+                ],
+                alignItems: "Center"
+            }).addStyleClass("sapUiContentPadding");
+
+            // Create page
+            var oPage = new Page({
+                title: "DocAI v4 API Test",
+                showHeader: true,
+                showNavButton: true,
+                navButtonPress: function() {
+                    stopPolling();
+                    window.location.href = "/";
+                },
+                content: [oMainContent]
+            });
+
+            // Create app
+            var oApp = new App({
+                pages: [oPage]
+            });
+
+            oApp.placeAt("content");
+
+            // Cleanup on page unload
+            window.addEventListener('beforeunload', function() {
+                stopPolling();
+            });
+        });
+    </script>
+</head>
+<body class="sapUiBody sapUiSizeCompact">
+    <div id="content"></div>
+</body>
+</html>

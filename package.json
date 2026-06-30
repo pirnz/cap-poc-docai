@@ -1,0 +1,50 @@
+{
+  "name": "cap-poc-docai",
+  "version": "1.0.0",
+  "description": "A simple CAP project.",
+  "dependencies": {
+    "@sap-cloud-sdk/connectivity": "^3",
+    "@sap-cloud-sdk/http-client": "^3",
+    "@sap/cds": "^9",
+    "@sap/xssec": "^4",
+    "adm-zip": "^0.5",
+    "body-parser": "^1",
+    "express": "^4",
+    "form-data": "^4",
+    "mailparser": "^3"
+  },
+  "devDependencies": {
+    "@cap-js/sqlite": "^2",
+    "@sap/cds-dk": "^9",
+    "axios": "^1.18.1",
+    "dotenv": "^17.4.2",
+    "glob": "^10.5.0"
+  },
+  "scripts": {
+    "start": "cds-serve"
+  },
+  "private": true,
+  "cds": {
+    "requires": {
+      "docai-destination": {
+        "kind": "odata",
+        "credentials": {
+          "destination": "docai-destination"
+        }
+      },
+      "[production]": {
+        "auth": "xsuaa"
+      },
+      "destinations": true,
+      "html5-repo": true,
+      "workzone": true
+    },
+    "fiori": {
+      "lean_draft": true
+    }
+  },
+  "sapux": [
+    "app/batches",
+    "app/documents"
+  ]
+}

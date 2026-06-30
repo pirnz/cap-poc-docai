@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice Processing with DocAI</title>
+    <script
+        id="sap-ui-bootstrap"
+        src="https://ui5.sap.com/1.120.0/resources/sap-ui-core.js"
+        data-sap-ui-theme="sap_horizon"
+        data-sap-ui-libs="sap.m,sap.ui.core"
+        data-sap-ui-async="true"
+        data-sap-ui-compatVersion="edge"
+        data-sap-ui-xx-waitForTheme="true"
+    ></script>
+    <script>
+        sap.ui.require([
+            "sap/m/App",
+            "sap/m/Page",
+            "sap/m/VBox",
+            "sap/m/HBox",
+            "sap/m/Title",
+            "sap/m/Text",
+            "sap/m/GenericTile",
+            "sap/m/TileContent",
+            "sap/m/Link",
+            "sap/m/FlexBox",
+            "sap/ui/core/Icon"
+        ], function (App, Page, VBox, HBox, Title, Text, GenericTile, TileContent, Link, FlexBox, Icon) {
+
+            // Create tiles for each app
+            var oBatchesTile = new GenericTile({
+                header: "Processing Batches",
+                subheader: "Upload and Manage",
+                press: function() {
+                    window.location.href = "/batches-simple.html";
+                },
+                tileContent: new TileContent({
+                    content: new VBox({
+                        items: [
+                            new Icon({
+                                src: "sap-icon://folder",
+                                size: "3rem",
+                                color: "#0070f2"
+                            }).addStyleClass("sapUiTinyMarginBottom"),
+                            new Text({
+                                text: "Upload .eml or .pdf files, track processing progress, and view document counts."
+                            }).addStyleClass("sapUiTinyMarginTop")
+                        ],
+                        alignItems: "Center"
+                    })
+                })
+            }).addStyleClass("sapUiMediumMargin");
+
+            var oDocumentsTile = new GenericTile({
+                header: "Invoice Documents",
+                subheader: "View and Validate",
+                press: function() {
+                    window.location.href = "/documents-simple.html";
+                },
+                tileContent: new TileContent({
+                    content: new VBox({
+                        items: [
+                            new Icon({
+                                src: "sap-icon://document",
+                                size: "3rem",
+                                color: "#0070f2"
+                            }).addStyleClass("sapUiTinyMarginBottom"),
+                            new Text({
+                                text: "View extracted invoice data, validate mandatory fields, and review confidence scores."
+                            }).addStyleClass("sapUiTinyMarginTop")
+                        ],
+                        alignItems: "Center"
+                    })
+                })
+            }).addStyleClass("sapUiMediumMargin");
+
+            var oDocAITestTile = new GenericTile({
+                header: "DocAI v4 API Test",
+                subheader: "Test Integration",
+                press: function() {
+                    window.location.href = "/docai-test.html";
+                },
+                tileContent: new TileContent({
+                    content: new VBox({
+                        items: [
+                            new Icon({
+                                src: "sap-icon://lab",
+                                size: "3rem",
+                                color: "#0070f2"
+                            }).addStyleClass("sapUiTinyMarginBottom"),
+                            new Text({
+                                text: "Test SAP Document Information Extraction API v4 (OData) integration with real-time monitoring."
+                            }).addStyleClass("sapUiTinyMarginTop")
+                        ],
+                        alignItems: "Center"
+                    })
+                })
+            }).addStyleClass("sapUiMediumMargin");
+
+            // Features list
+            var aFeatures = [
+                ".eml/.pdf Upload",
+                "ZIP Extraction",
+                "DocAI Integration",
+                "Webhook Support",
+                "Multi-version Parsing",
+                "Confidence Tracking",
+                "Field Validation"
+            ];
+
+            var oFeatureBox = new FlexBox({
+                wrap: "Wrap",
+                items: aFeatures.map(function(feature) {
+                    return new Text({
+                        text: "✅ " + feature
+                    }).addStyleClass("sapUiTinyMarginEnd sapUiTinyMarginBottom");
+                })
+            }).addStyleClass("sapUiSmallMarginTop");
+
+            // API Links
+            var oApiBox = new VBox({
+                items: [
+                    new Title({ text: "API Endpoints", level: "H3" }).addStyleClass("sapUiSmallMarginTop"),
+                    new Link({ text: "Main OData Service", href: "/invoice/", target: "_blank" }),
+                    new Link({ text: "Service Metadata", href: "/invoice/$metadata", target: "_blank" }),
+                    new Link({ text: "DocAI Webhook", href: "/webhook/", target: "_blank" })
+                ]
+            }).addStyleClass("sapUiMediumMarginTop");
+
+            // Testing section
+            var oTestBox = new VBox({
+                items: [
+                    new Title({ text: "Testing", level: "H3" }).addStyleClass("sapUiSmallMarginTop"),
+                    new Text({ text: "Test DocAI v4 API: /docai-test.html" }),
+                    new Text({ text: "Test webhook: node test/test-callback.js" }),
+                    new Text({ text: "Test DocAI v4: node test/test-docai-v4.js" }),
+                    new Text({ text: "Verify data: node test/verify-data.js" }),
+                    new Text({ text: "Upload files: node test/upload-test-files.js" })
+                ]
+            }).addStyleClass("sapUiMediumMarginTop");
+
+            // Status badge
+            var oStatusBox = new HBox({
+                items: [
+                    new Title({ text: "Invoice Processing with DocAI", level: "H2" }),
+                    new Text({ text: "Ready" })
+                        .addStyleClass("sapUiTinyMarginBegin")
+                        .addStyleClass("sapUiPositiveText")
+                ],
+                alignItems: "Center"
+            });
+
+            var oSubtitle = new Text({
+                text: "Process invoice PDFs with SAP Document Information Extraction"
+            }).addStyleClass("sapUiTinyMarginTop sapUiTinyMarginBottom");
+
+            // Tiles container
+            var oTilesBox = new FlexBox({
+                wrap: "Wrap",
+                justifyContent: "Center",
+                items: [oBatchesTile, oDocumentsTile, oDocAITestTile]
+            }).addStyleClass("sapUiMediumMarginTop sapUiMediumMarginBottom");
+
+            // Main content
+            var oMainContent = new VBox({
+                width: "100%",
+                alignItems: "Center",
+                items: [
+                    new VBox({
+                        width: "90%",
+                        alignItems: "Center",
+                        items: [
+                            oStatusBox,
+                            oSubtitle,
+                            oTilesBox,
+                            new VBox({
+                                width: "100%",
+                                items: [
+                                    new Title({ text: "Features", level: "H3" }).addStyleClass("sapUiMediumMarginTop"),
+                                    oFeatureBox,
+                                    oApiBox,
+                                    oTestBox
+                                ]
+                            })
+                        ]
+                    })
+                ]
+            }).addStyleClass("sapUiContentPadding");
+
+            // Create page
+            var oPage = new Page({
+                showHeader: false,
+                content: [oMainContent],
+                backgroundDesign: "Solid"
+            });
+
+            // Create app
+            var oApp = new App({
+                pages: [oPage]
+            });
+
+            oApp.placeAt("content");
+        });
+    </script>
+</head>
+<body class="sapUiBody">
+    <div id="content"></div>
+</body>
+</html>

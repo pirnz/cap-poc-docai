@@ -1,0 +1,118 @@
+_schema-version: 3.3.0
+ID: cap-poc-docai
+version: 1.0.0
+description: "A simple CAP project."
+parameters:
+  enable-parallel-deployments: true
+  deploy_mode: html5-repo
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - npm ci
+        - npx cds build --production
+modules:
+  - name: cap-poc-docai-srv
+    type: nodejs
+    path: gen/srv
+    parameters:
+      instances: 1
+      buildpack: nodejs_buildpack
+    build-parameters:
+      builder: npm-ci
+    provides:
+      - name: srv-api # required by consumers of CAP services (e.g. approuter)
+        properties:
+          srv-url: ${default-url}
+    requires:
+      - name: cap-poc-docai-auth
+      - name: cap-poc-docai-destination
+
+  - name: cap-poc-docai-app-deployer
+    type: com.sap.application.content
+    path: gen
+    requires:
+      - name: cap-poc-docai-auth
+      - name: srv-api
+      - name: cap-poc-docai-html5-repo-host
+        parameters:
+          content-target: true
+          config:
+            HTML5Runtime_enabled: true
+    build-parameters:
+      build-result: app/
+      requires:
+
+
+
+  - name: cap-poc-docai-destinations
+    type: com.sap.application.content
+    requires:
+      - name: cap-poc-docai-auth
+        parameters:
+          service-key:
+            name: cap-poc-docai-auth-key
+      - name: cap-poc-docai-html5-repo-host
+        parameters:
+          service-key:
+            name: cap-poc-docai-html5-repo-host-key
+      - name: srv-api
+      - name: cap-poc-docai-destination
+        parameters:
+          content-target: true
+    build-parameters:
+      no-source: true
+    parameters:
+      content:
+        instance:
+          existing_destinations_policy: update
+          destinations:
+            - Name: cap-poc-docai-html5-repository
+              ServiceInstanceName: cap-poc-docai-html5-repo-host
+              ServiceKeyName: cap-poc-docai-html5-repo-host-key
+              sap.cloud.service: cappocdocai.service
+            - Name: cap-poc-docai-auth
+              Authentication: OAuth2UserTokenExchange
+              ServiceInstanceName: cap-poc-docai-auth
+              ServiceKeyName: cap-poc-docai-auth-key
+              sap.cloud.service: cappocdocai.service
+resources:
+  - name: cap-poc-docai-auth
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: xsuaa
+      service-plan: application
+      path: ./xs-security.json
+      config:
+        xsappname: cap-poc-docai-${org}-${space}
+        tenant-mode: dedicated
+        oauth2-configuration:
+          credential-types:
+            - "binding-secret"
+            - "x509"
+  - name: cap-poc-docai-destination
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: destination
+      service-plan: lite
+      config:
+        HTML5Runtime_enabled: true
+        init_data:
+          instance:
+            existing_destinations_policy: update
+            destinations:
+              - Name: srv-api
+                URL: ~{srv-api/srv-url}
+                Authentication: NoAuthentication
+                Type: HTTP
+                ProxyType: Internet
+                HTML5.ForwardAuthToken: true
+                HTML5.DynamicDestination: true
+    requires:
+      - name: srv-api
+
+  - name: cap-poc-docai-html5-repo-host
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-plan: app-host
