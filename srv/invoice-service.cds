@@ -1,5 +1,7 @@
 using { com.sap.docai as db } from '../db/schema';
 
+@requires: ['system-user', 'authenticated-user']
+@cds.server.body_parser.limit: '50mb'
 service InvoiceProcessingService @(path: '/invoice') {
 
   entity ProcessingBatches as projection on db.ProcessingBatches;
@@ -46,9 +48,7 @@ service InvoiceProcessingService @(path: '/invoice') {
   };
 
   // DocAI v4 API Test Actions
-  action getAvailableSchemas(
-    destination: String
-  ) returns {
+  action getAvailableSchemas() returns {
     schemas: array of {
       id: String;
       name: String;
@@ -60,17 +60,14 @@ service InvoiceProcessingService @(path: '/invoice') {
     };
   };
 
-  action testDocAI(
-    destination: String
-  ) returns {
+  action testDocAI() returns {
     success: Boolean;
     message: String;
     filesCount: Integer;
   };
 
   action submitToDocAI(
-    destination: String,
-    schemaVersion_ID: String,
+    schemaId: String,
     clientId: String,
     ocrEngine: String,
     fileName: String,
@@ -83,7 +80,6 @@ service InvoiceProcessingService @(path: '/invoice') {
   };
 
   action getDocAIStatus(
-    destination: String,
     documentId: String
   ) returns {
     status: String;
@@ -93,7 +89,6 @@ service InvoiceProcessingService @(path: '/invoice') {
   };
 
   action getDocAIResults(
-    destination: String,
     documentId: String
   ) returns {
     headerFields: array of {
@@ -148,20 +143,15 @@ service InvoiceProcessingService @(path: '/invoice') {
   };
 
   // Schema Service Proxy Actions
-  action getSchemaClients(
-    destination: String
-  ) returns {
+  action getSchemaClients() returns {
     clients: array of String;
   };
 
-  action getSchemaVersionsList(
-    destination: String
-  ) returns {
+  action getSchemaVersionsList() returns {
     schemaVersions: array of LargeString;
   };
 
   action getSchemaFields(
-    destination: String,
     schemaVersionId: String
   ) returns {
     fields: array of LargeString;

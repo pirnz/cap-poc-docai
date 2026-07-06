@@ -54,8 +54,6 @@
             var editedEntities = {};
             var pdfData = null;
 
-            // Hardcoded destination
-            var DESTINATION = "docai-destination";
 
             // JSON model for clients
             var oClientsModel = new JSONModel({
@@ -238,10 +236,10 @@
             function loadClients() {
                 oClientsModel.setProperty("/loading", true);
 
-                fetch("/invoice/getSchemaClients", {
+                fetch("./odata/invoice/getSchemaClients", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ destination: DESTINATION })
+                    body: JSON.stringify({})
                 })
                 .then(function(response) {
                     if (!response.ok) throw new Error("Failed to load clients");
@@ -273,10 +271,10 @@
             function loadSchemaVersions() {
                 oSchemaVersionsModel.setProperty("/loading", true);
 
-                fetch("/invoice/getSchemaVersionsList", {
+                fetch("./odata/invoice/getSchemaVersionsList", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ destination: DESTINATION })
+                    body: JSON.stringify({})
                 })
                 .then(function(response) {
                     if (!response.ok) throw new Error("Failed to load schema versions");
@@ -487,14 +485,12 @@
                 oProgress.setState("Information");
                 oProgress.setDisplayValue("Testing connection...");
 
-                fetch("/invoice/testDocAI", {
+                fetch("./odata/invoice/testDocAI", {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json"
                     },
-                    body: JSON.stringify({
-                        destination: DESTINATION
-                    })
+                    body: JSON.stringify({})
                 })
                 .then(response => response.json())
                 .then(data => {
@@ -559,19 +555,17 @@
                     oProgress.setDisplayValue("Uploading to DocAI...");
 
                     var requestData = {
-                        destination: DESTINATION,
-                        schemaVersion_ID: selectedSchemaVersionId,
+                        schemaId: selectedSchemaVersionId,
                         clientId: selectedClient,
                         ocrEngine: oOcrEngineInput.getValue() || undefined,
                         fileName: file.name,
                         fileContent: fileContent
                     };
 
-                    logForDocument(newDocId, "Sending to DocAI via destination: " + requestData.destination, false);
-                    logForDocument(newDocId, "Schema Version ID: " + requestData.schemaVersion_ID, false);
+                    logForDocument(newDocId, "Schema Version ID: " + requestData.schemaId, false);
                     logForDocument(newDocId, "Client ID: " + requestData.clientId, false);
 
-                    fetch("/invoice/submitToDocAI", {
+                    fetch("./odata/invoice/submitToDocAI", {
                         method: "POST",
                         headers: {
                             "Content-Type": "application/json"
@@ -634,13 +628,12 @@
 
                 logForDocument(currentDocId, "Checking status for: " + currentDoc.documentId, false);
 
-                fetch("/invoice/getDocAIStatus", {
+                fetch("./odata/invoice/getDocAIStatus", {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json"
                     },
                     body: JSON.stringify({
-                        destination: DESTINATION,
                         documentId: currentDoc.documentId
                     })
                 })
@@ -704,13 +697,12 @@
                 }
 
                 processingDocs.forEach(function(doc) {
-                    fetch("/invoice/getDocAIStatus", {
+                    fetch("./odata/invoice/getDocAIStatus", {
                         method: "POST",
                         headers: {
                             "Content-Type": "application/json"
                         },
                         body: JSON.stringify({
-                            destination: DESTINATION,
                             documentId: doc.documentId
                         })
                     })
@@ -755,11 +747,10 @@
                 var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
                 logForDocument(currentDocId, "Fetching schema fields for version ID: " + schemaVersionId, false);
 
-                return fetch("/invoice/getSchemaFields", {
+                return fetch("./odata/invoice/getSchemaFields", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                        destination: DESTINATION,
                         schemaVersionId: schemaVersionId
                     })
                 })
@@ -790,11 +781,10 @@
                 var currentDocId = oDocumentsModel.getProperty("/currentDocumentId");
                 logForDocument(currentDocId, "Fetching document entities for ID: " + documentId, false);
 
-                return fetch("/invoice/getDocAIResults", {
+                return fetch("./odata/invoice/getDocAIResults", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                        destination: DESTINATION,
                         documentId: documentId
                     })
                 })
@@ -1200,7 +1190,7 @@
                 }
 
                 // Call the new CAP action that updates and confirms in one go
-                fetch("/invoice/updateAndConfirmDocument", {
+                fetch("./odata/invoice/updateAndConfirmDocument", {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json"
@@ -1404,7 +1394,7 @@
 
                             logForDocument(currentDocId, "Posting invoice to S/4HANA...", false);
 
-                            fetch("/invoice/postSupplierInvoiceToS4", {
+                            fetch("./odata/invoice/postSupplierInvoiceToS4", {
                                 method: "POST",
                                 headers: {
                                     "Content-Type": "application/json"
@@ -1869,7 +1859,7 @@
                 showNavButton: true,
                 navButtonPress: function() {
                     stopPolling();
-                    window.location.href = "/";
+                    window.location.href = "./index.html";
                 },
                 content: [oMainContent]
             });

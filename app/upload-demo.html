@@ -84,7 +84,7 @@
                         var base64Content = e.target.result.split(',')[1];
 
                         // Call upload endpoint
-                        fetch("/invoice/uploadFile", {
+                        fetch("./odata/invoice/uploadFile", {
                             method: "POST",
                             headers: {
                                 "Content-Type": "application/json"
@@ -113,7 +113,7 @@
                             });
 
                             // Fetch documents for this batch
-                            return fetch("/invoice/ProcessingBatches('" + data.ID + "')?$expand=documents");
+                            return fetch("./odata/invoice/ProcessingBatches('" + data.ID + "')?$expand=documents");
                         })
                         .then(function(response) {
                             return response.json();
@@ -419,7 +419,7 @@
                                             text: "Go to DocAI Workbench",
                                             icon: "sap-icon://business-card",
                                             press: function() {
-                                                window.location.href = "/docai-test.html";
+                                                window.location.href = "./docai-test.html";
                                             }
                                         }).addStyleClass("sapUiSmallMarginTop")
                                     ]
@@ -436,7 +436,7 @@
                 showHeader: true,
                 showNavButton: true,
                 navButtonPress: function() {
-                    window.location.href = "/";
+                    window.location.href = "./index.html";
                 },
                 content: [oMainContent]
             });

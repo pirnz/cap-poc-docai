@@ -233,7 +233,7 @@ npm start
 
 2. **Create a test document** (in another terminal):
 ```bash
-curl -X POST http://localhost:4004/odata/v4/invoice/uploadFile \
+curl -X POST http://localhost:4004/odata/invoice/uploadFile \
   -H "Content-Type: application/json" \
   -d '{
     "fileName": "test-invoice.pdf",

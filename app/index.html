@@ -34,7 +34,7 @@
                 header: "DocAI Workbench",
                 subheader: "Main Application",
                 press: function() {
-                    window.location.href = "/docai-test.html";
+                    window.location.href = "./docai-test.html";
                 },
                 tileContent: new TileContent({
                     content: new VBox({
@@ -57,7 +57,7 @@
                 header: "Upload Demo",
                 subheader: "Batch File Upload",
                 press: function() {
-                    window.location.href = "/upload-demo.html";
+                    window.location.href = "./upload-demo.html";
                 },
                 tileContent: new TileContent({
                     content: new VBox({
@@ -100,9 +100,10 @@
             var oApiBox = new VBox({
                 items: [
                     new Title({ text: "API Endpoints", level: "H3" }).addStyleClass("sapUiSmallMarginTop"),
-                    new Link({ text: "Main OData Service", href: "/invoice/", target: "_blank" }),
-                    new Link({ text: "Service Metadata", href: "/invoice/$metadata", target: "_blank" }),
-                    new Link({ text: "DocAI Webhook", href: "/webhook/", target: "_blank" })
+                    new Link({ text: "Invoice Service", href: "./odata/invoice/", target: "_blank" }),
+                    new Link({ text: "Invoice Metadata", href: "./odata/invoice/$metadata", target: "_blank" }),
+                    new Link({ text: "Callback Service", href: "./odata/v4/callback/", target: "_blank" }),
+                    new Link({ text: "Callback Metadata", href: "./odata/v4/callback/$metadata", target: "_blank" })
                 ]
             }).addStyleClass("sapUiMediumMarginTop");
 

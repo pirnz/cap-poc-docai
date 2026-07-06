@@ -40,3 +40,5 @@ db.sqlite*
 test/files/
 tmp/
 PROMPT.md
+resources/
+*.zip

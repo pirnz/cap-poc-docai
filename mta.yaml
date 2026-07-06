@@ -1,7 +1,7 @@
 _schema-version: 3.3.0
 ID: cap-poc-docai
 version: 1.0.0
-description: "A simple CAP project."
+description: "CAP DocAI Integration with Callback Support"
 parameters:
   enable-parallel-deployments: true
   deploy_mode: html5-repo
@@ -11,6 +11,7 @@ build-parameters:
       commands:
         - npm ci
         - npx cds build --production
+        - cp -r db.sqlite gen/srv
 modules:
   - name: cap-poc-docai-srv
     type: nodejs
@@ -28,22 +29,32 @@ modules:
       - name: cap-poc-docai-auth
       - name: cap-poc-docai-destination
 
+  - name: cap-poc-docai-app
+    type: html5
+    path: ./app
+    build-parameters:
+      build-result: .
+      builder: custom
+      commands:
+        - npm install
+        - npm run build
+      supported-platforms:
+        []
+
   - name: cap-poc-docai-app-deployer
     type: com.sap.application.content
-    path: gen
+    path: .
     requires:
-      - name: cap-poc-docai-auth
-      - name: srv-api
       - name: cap-poc-docai-html5-repo-host
         parameters:
           content-target: true
-          config:
-            HTML5Runtime_enabled: true
     build-parameters:
-      build-result: app/
+      build-result: resources
       requires:
-
-
+        - artifacts:
+            - cap-poc-docai-app.zip
+          name: cap-poc-docai-app
+          target-path: resources/
 
   - name: cap-poc-docai-destinations
     type: com.sap.application.content
@@ -64,7 +75,7 @@ modules:
       no-source: true
     parameters:
       content:
-        instance:
+        subaccount:
           existing_destinations_policy: update
           destinations:
             - Name: cap-poc-docai-html5-repository
@@ -76,6 +87,41 @@ modules:
               ServiceInstanceName: cap-poc-docai-auth
               ServiceKeyName: cap-poc-docai-auth-key
               sap.cloud.service: cappocdocai.service
+            - Name: cap-docai-poc-dest
+              Authentication: OAuth2ClientCredentials
+              ServiceInstanceName: cap-poc-docai-auth
+              ServiceKeyName: cap-poc-docai-auth-key
+              sap.cloud.service: cappocdocai.service
+              URL: ~{srv-api/srv-url}
+
+  # DocAI Callback Destination
+  - name: cap-poc-docai-callback-destination
+    type: com.sap.application.content
+    requires:
+      - name: cap-poc-docai-auth
+        parameters:
+          service-key:
+            name: callback-destination-key
+      - name: cap-poc-docai-destination
+        parameters:
+          content-target: true
+      - name: srv-api
+    parameters:
+      content:
+        subaccount:
+          destinations:
+            # Destination for DocAI to call back with extraction results
+            - Authentication: OAuth2ClientCredentials
+              HTML5.DynamicDestination: true
+              Name: DOC_AI_cap-poc-docai
+              ServiceInstanceName: cap-poc-docai-auth
+              ServiceKeyName: callback-destination-key
+              # Callback endpoint URL: <srv-url>/odata/v4/callback/callback
+              URL: ~{srv-api/srv-url}/odata/v4/callback/callback
+          existing_destinations_policy: update
+    build-parameters:
+      no-source: true
+
 resources:
   - name: cap-poc-docai-auth
     type: org.cloudfoundry.managed-service
@@ -90,6 +136,7 @@ resources:
           credential-types:
             - "binding-secret"
             - "x509"
+
   - name: cap-poc-docai-destination
     type: org.cloudfoundry.managed-service
     parameters:
@@ -98,7 +145,7 @@ resources:
       config:
         HTML5Runtime_enabled: true
         init_data:
-          instance:
+          subaccount:
             existing_destinations_policy: update
             destinations:
               - Name: srv-api

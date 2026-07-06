@@ -728,14 +728,14 @@ module.exports = cds.service.impl(async function() {
 
   // Get available active schemas
   this.on('getAvailableSchemas', async (req) => {
-    const { destination } = req.data;
-    console.log(`[INFO] getAvailableSchemas - destination: ${destination || 'docai-destination'}`);
+    const destinationName = 'docai-destination';
+    console.log(`[INFO] getAvailableSchemas - destination: ${destinationName}`);
 
     try {
       const axios = require('axios');
       const { getDestination } = require('@sap-cloud-sdk/connectivity');
 
-      const destConfig = await getDestination({ destinationName: destination || 'docai-destination' });
+      const destConfig = await getDestination({ destinationName });
       const baseUrl = destConfig.url.replace(/\/$/, '');
 
       const authHeaders = destConfig.authTokens && destConfig.authTokens.length > 0
@@ -772,13 +772,13 @@ module.exports = cds.service.impl(async function() {
 
   // Test API connection
   this.on('testDocAI', async (req) => {
-    const { destination } = req.data;
-    console.log(`[INFO] testDocAI - destination: ${destination || 'docai-destination'}`);
+    const destinationName = 'docai-destination';
+    console.log(`[INFO] testDocAI - destination: ${destinationName}`);
 
     try {
       // Try to fetch the list of files to test connectivity
       const response = await executeHttpRequest(
-        { destinationName: destination || 'docai-destination' },
+        { destinationName },
         {
           method: 'GET',
           url: '/FileService/Files',
@@ -803,7 +803,8 @@ module.exports = cds.service.impl(async function() {
 
   // Submit document to DocAI v4
   this.on('submitToDocAI', async (req) => {
-    const { destination, schemaId: requestSchemaId, clientId, ocrEngine, fileName, fileContent } = req.data;
+    const { schemaId: requestSchemaId, clientId, ocrEngine, fileName, fileContent } = req.data;
+    const destinationName = 'docai-destination';
     console.log(`[INFO] submitToDocAI action - fileName: ${fileName}, schemaId: ${requestSchemaId}`);
 
     try {
@@ -816,7 +817,7 @@ module.exports = cds.service.impl(async function() {
       console.log(`[DEBUG] submitToDocAI action - Uploading file: ${fileName}, size: ${pdfBuffer.length} bytes`);
 
       // Get destination config
-      const destConfig = await getDestination({ destinationName: destination || 'docai-destination' });
+      const destConfig = await getDestination({ destinationName });
       console.log('[DEBUG] submitToDocAI action - Destination URL:', destConfig.url);
       const baseUrl = destConfig.url.replace(/\/$/, '');
 
@@ -915,15 +916,16 @@ module.exports = cds.service.impl(async function() {
 
   // Get document status
   this.on('getDocAIStatus', async (req) => {
-    const { destination, documentId } = req.data;
-    console.log(`[INFO] getDocAIStatus - destination: ${destination || 'docai-destination'}, documentId: ${documentId}`);
+    const { documentId } = req.data;
+    const destinationName = 'docai-destination';
+    console.log(`[INFO] getDocAIStatus - destination: ${destinationName}, documentId: ${documentId}`);
 
     try {
       const axios = require('axios');
       const { getDestination } = require('@sap-cloud-sdk/connectivity');
 
       // Get destination config
-      const destConfig = await getDestination({ destinationName: destination || 'docai-destination' });
+      const destConfig = await getDestination({ destinationName });
 
       // Build URL - ensure no double slash
       // OData v4: UUID/GUID values don't need quotes
@@ -957,15 +959,16 @@ module.exports = cds.service.impl(async function() {
 
   // Get extraction results
   this.on('getDocAIResults', async (req) => {
-    const { destination, documentId } = req.data;
-    console.log(`[INFO] getDocAIResults - destination: ${destination || 'docai-destination'}, documentId: ${documentId}`);
+    const { documentId } = req.data;
+    const destinationName = 'docai-destination';
+    console.log(`[INFO] getDocAIResults - destination: ${destinationName}, documentId: ${documentId}`);
 
     try {
       const axios = require('axios');
       const { getDestination } = require('@sap-cloud-sdk/connectivity');
 
       // Get destination config
-      const destConfig = await getDestination({ destinationName: destination || 'docai-destination' });
+      const destConfig = await getDestination({ destinationName });
 
       // Build URL with expand - ensure no double slash
       // OData v4: UUID/GUID values don't need quotes
@@ -1048,25 +1051,19 @@ module.exports = cds.service.impl(async function() {
         entityMap[entity.ID] = entity;
       });
 
-      // Helper to find root parent name
-      function getRootParentName(entity) {
-        let current = entity;
-        while (current.parent_ID) {
-          const parent = entityMap[current.parent_ID];
-          if (!parent) break;
-          current = parent;
-        }
-        return current.name;
+      // Helper to check if entity's parent is a Table
+      function isTableField(entity) {
+        if (!entity.parent_ID) return false;
+        const parent = entityMap[entity.parent_ID];
+        return parent && parent.type === 'Table';
       }
 
       // Process entities - only Fields (not Groups or Tables)
       entities.forEach(entity => {
         if (entity.type !== 'Field') return;
 
-        const rootParent = getRootParentName(entity);
-
-        if (rootParent === 'invoiceItemDetails') {
-          // Line item field
+        if (isTableField(entity)) {
+          // Line item field - works with any table name
           const occurrence = entity.occurrence || 1;
           if (!lineItemGroups[occurrence]) {
             lineItemGroups[occurrence] = {
@@ -1350,14 +1347,14 @@ module.exports = cds.service.impl(async function() {
   this.on('getSchemaClients', async (req) => {
     console.log(`[INFO] getSchemaClients - start`);
     try {
-      const { destination } = req.data;
-      const dest = await cds.connect.to(destination);
+      const destinationName = 'docai-destination';
+      const dest = await cds.connect.to(destinationName);
       const baseUrl = dest.options.url || '';
 
       const url = `${baseUrl}/SchemaService/Schemas?$select=clientId&$filter=clientId ne null`;
       console.log(`[DEBUG] getSchemaClients - URL: ${url}`);
       const response = await executeHttpRequest(
-        { destinationName: destination },
+        { destinationName },
         { method: 'GET', url }
       );
 
@@ -1380,14 +1377,14 @@ module.exports = cds.service.impl(async function() {
   this.on('getSchemaVersionsList', async (req) => {
     console.log(`[INFO] getSchemaVersionsList - start`);
     try {
-      const { destination } = req.data;
-      const dest = await cds.connect.to(destination);
+      const destinationName = 'docai-destination';
+      const dest = await cds.connect.to(destinationName);
       const baseUrl = dest.options.url || '';
 
       const url = `${baseUrl}/SchemaService/SchemaVersions?$filter=isActive eq true&$expand=schema`;
       console.log(`[DEBUG] getSchemaVersionsList - URL: ${url}`);
       const response = await executeHttpRequest(
-        { destinationName: destination },
+        { destinationName },
         { method: 'GET', url }
       );
 
@@ -1409,15 +1406,16 @@ module.exports = cds.service.impl(async function() {
   this.on('getSchemaFields', async (req) => {
     console.log(`[INFO] getSchemaFields - start`);
     try {
-      const { destination, schemaVersionId } = req.data;
+      const { schemaVersionId } = req.data;
+      const destinationName = 'docai-destination';
       console.log(`[DEBUG] getSchemaFields - schemaVersionId: ${schemaVersionId}`);
-      const dest = await cds.connect.to(destination);
+      const dest = await cds.connect.to(destinationName);
       const baseUrl = dest.options.url || '';
 
       const url = `${baseUrl}/SchemaService/SchemaEntities?$filter=schemaVersion_ID eq ${schemaVersionId} and type eq 'Field'`;
       console.log(`[DEBUG] getSchemaFields - URL: ${url}`);
       const response = await executeHttpRequest(
-        { destinationName: destination },
+        { destinationName },
         { method: 'GET', url }
       );
 

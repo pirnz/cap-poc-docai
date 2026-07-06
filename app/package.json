@@ -1,0 +1,13 @@
+{
+  "name": "cap-poc-docai-app",
+  "version": "1.0.0",
+  "description": "DocAI Test UI",
+  "scripts": {
+    "build": "zip -r cap-poc-docai-app.zip * -x node_modules/\\* -x cap-poc-docai-app.zip"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bestzip": "^2.2.1"
+  }
+}

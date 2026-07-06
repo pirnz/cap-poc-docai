@@ -1,0 +1,49 @@
+{
+    "_version": "1.32.0",
+    "sap.app": {
+        "id": "cap_poc_docai_app",
+        "type": "application",
+        "applicationVersion": {
+            "version": "1.0.0"
+        },
+        "title": "DocAI Test UI",
+        "description": "Document AI Integration Test Interface",
+        "crossNavigation": {
+            "inbounds": {
+                "docai-test": {
+                    "semanticObject": "docai",
+                    "action": "test",
+                    "title": "DocAI Test UI",
+                    "subTitle": "Document AI Integration Test Interface",
+                    "icon": ""
+                }
+            }
+        }
+    },
+    "sap.flp": {
+        "type": "application",
+        "config": {
+            "target": {
+                "type": "URL",
+                "navmode": "inplace"
+            }
+        }
+    },
+    "sap.ui":{
+        "technology": "URL",
+        "deviceTypes": {
+            "desktop": true,
+            "tablet": true,
+            "phone": true
+        }
+    },
+    "sap.cloud": {
+        "public": true,
+        "service": "cappocdocai.service"
+    },
+    "sap.platform.runtime": {
+      "html5": {
+        "appUrl": "./"
+      }
+    }
+}
