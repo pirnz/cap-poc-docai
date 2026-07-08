@@ -23,6 +23,10 @@ entity Documents : cuid, managed {
   docaiDocumentId: String(255);
   extractionStatus: String(50);
   extractionError: String(5000);
+  extractionData: LargeString; // Schema-agnostic JSON extraction from callback
+  extractionSource: String(20); // 'callback' or 'api'
+  schemaVersionId: String(255); // Schema version ID from DocAI
+  clientId: String(255); // Client ID from DocAI
   header: Composition of one InvoiceHeader on header.document = $self;
   lineItems: Composition of many InvoiceLineItems on lineItems.document = $self;
   validationResults: Composition of many ValidationResults on validationResults.document = $self;

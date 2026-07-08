@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Monitoring</title>
+    <script
+        id="sap-ui-bootstrap"
+        src="https://ui5.sap.com/1.120.0/resources/sap-ui-core.js"
+        data-sap-ui-theme="sap_horizon"
+        data-sap-ui-libs="sap.m,sap.ui.core"
+        data-sap-ui-async="true"
+        data-sap-ui-compatVersion="edge"
+        data-sap-ui-xx-waitForTheme="true"
+    ></script>
+    <script>
+        sap.ui.require([
+            "sap/m/App",
+            "sap/m/Page",
+            "sap/m/VBox",
+            "sap/m/HBox",
+            "sap/m/Title",
+            "sap/m/Text",
+            "sap/m/Button",
+            "sap/m/MessageToast",
+            "sap/m/Label",
+            "sap/m/ObjectStatus",
+            "sap/ui/model/json/JSONModel",
+            "sap/m/Table",
+            "sap/m/Column",
+            "sap/m/ColumnListItem"
+        ], function (App, Page, VBox, HBox, Title, Text, Button, MessageToast, Label, ObjectStatus, JSONModel, Table, Column, ColumnListItem) {
+
+            // JSON model for documents
+            var oDocumentsModel = new JSONModel({
+                documents: []
+            });
+
+            // Helper function: Generate UUID
+            function generateUUID() {
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    var r = Math.random() * 16 | 0;
+                    var v = c === 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            }
+
+            // Load all documents from database
+            function loadAllDocuments() {
+                fetch("./odata/invoice/Documents", {
+                    method: "GET",
+                    headers: {
+                        "Content-Type": "application/json"
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    var dbDocuments = data.value || [];
+                    var uiDocuments = [];
+
+                    // Map database documents to UI format
+                    dbDocuments.forEach(function(dbDoc) {
+                        var newDoc = {
+                            id: generateUUID(),
+                            fileName: dbDoc.fileName || "Unknown",
+                            documentId: dbDoc.docaiDocumentId,
+                            schemaVersionId: dbDoc.schemaVersionId,
+                            clientId: dbDoc.clientId,
+                            status: dbDoc.status || "unknown",
+                            extractionStatus: dbDoc.extractionStatus,
+                            extractionSource: dbDoc.extractionSource,
+                            uploadedAt: dbDoc.createdAt
+                        };
+
+                        uiDocuments.push(newDoc);
+                    });
+
+                    oDocumentsModel.setProperty("/documents", uiDocuments);
+                    MessageToast.show("Loaded " + dbDocuments.length + " documents from database");
+                })
+                .catch(error => {
+                    MessageToast.show("Failed to load documents: " + error.message);
+                    console.error("Failed to load documents:", error);
+                });
+            }
+
+            // Get extraction source display text with indicator
+            function getExtractionSourceText(source) {
+                if (source === 'api') return '📡 API';
+                if (source === 'callback') return '📨 Callback';
+                if (source === 'local') return '💾 Local';
+                return source || '-';
+            }
+
+            // Get status display state
+            function getStatusState(status) {
+                if (status === "confirmed" || status === "reviewNeeded" || status === "DONE" || status === "SUCCEEDED") {
+                    return "Success";
+                }
+                if (status === "failed" || status === "ERROR" || status === "FAILED") {
+                    return "Error";
+                }
+                if (status === "pending" || status === "uploading") {
+                    return "None";
+                }
+                return "Information";
+            }
+
+            // Documents table
+            var oDocumentsTable = new Table({
+                width: "100%",
+                mode: "SingleSelectMaster",
+                columns: [
+                    new Column({
+                        header: new Label({ text: "File Name" }),
+                        width: "25%"
+                    }),
+                    new Column({
+                        header: new Label({ text: "Status" }),
+                        width: "15%"
+                    }),
+                    new Column({
+                        header: new Label({ text: "Extraction Status" }),
+                        width: "15%"
+                    }),
+                    new Column({
+                        header: new Label({ text: "Extraction Source" }),
+                        width: "15%"
+                    }),
+                    new Column({
+                        header: new Label({ text: "Uploaded At" }),
+                        width: "20%"
+                    }),
+                    new Column({
+                        header: new Label({ text: "Actions" }),
+                        width: "10%"
+                    })
+                ],
+                items: {
+                    path: "documents>/documents",
+                    template: new ColumnListItem({
+                        type: "Active",
+                        press: function(oEvent) {
+                            var oItem = oEvent.getSource();
+                            var oContext = oItem.getBindingContext("documents");
+                            var docId = oContext.getProperty("documentId");
+                            if (docId) {
+                                window.location.href = './validation.html?docId=' + docId;
+                            } else {
+                                MessageToast.show("No document ID available");
+                            }
+                        },
+                        cells: [
+                            new Text({ text: "{documents>fileName}" }),
+                            new ObjectStatus({
+                                text: "{documents>status}",
+                                state: {
+                                    path: "documents>status",
+                                    formatter: getStatusState
+                                }
+                            }),
+                            new Text({ text: "{documents>extractionStatus}" }),
+                            new Text({
+                                text: {
+                                    path: "documents>extractionSource",
+                                    formatter: getExtractionSourceText
+                                }
+                            }),
+                            new Text({
+                                text: {
+                                    path: "documents>uploadedAt",
+                                    formatter: function(timestamp) {
+                                        if (!timestamp) return "";
+                                        return new Date(timestamp).toLocaleString();
+                                    }
+                                }
+                            }),
+                            new Button({
+                                text: "View Details",
+                                icon: "sap-icon://detail-view",
+                                type: "Transparent",
+                                press: function(oEvent) {
+                                    oEvent.cancelBubble();
+                                    var oItem = oEvent.getSource().getParent();
+                                    var oContext = oItem.getBindingContext("documents");
+                                    var docId = oContext.getProperty("documentId");
+                                    if (docId) {
+                                        window.location.href = './validation.html?docId=' + docId;
+                                    } else {
+                                        MessageToast.show("No document ID available");
+                                    }
+                                }
+                            })
+                        ]
+                    })
+                }
+            }).setModel(oDocumentsModel, "documents");
+
+            // Refresh button
+            var oRefreshButton = new Button({
+                text: "Refresh All",
+                icon: "sap-icon://refresh",
+                type: "Emphasized",
+                press: loadAllDocuments
+            });
+
+            // Back button
+            var oBackButton = new Button({
+                text: "Back to Home",
+                icon: "sap-icon://home",
+                press: function() {
+                    window.location.href = "./index.html";
+                }
+            });
+
+            // Header section
+            var oHeader = new VBox({
+                width: "100%",
+                items: [
+                    new HBox({
+                        width: "100%",
+                        justifyContent: "SpaceBetween",
+                        alignItems: "Center",
+                        items: [
+                            new VBox({
+                                items: [
+                                    new Title({
+                                        text: "Document Monitoring",
+                                        level: "H2"
+                                    }),
+                                    new Text({
+                                        text: "Monitor all documents processed by DocAI"
+                                    }).addStyleClass("sapUiTinyMarginTop")
+                                ]
+                            }),
+                            new HBox({
+                                items: [
+                                    oRefreshButton,
+                                    oBackButton.addStyleClass("sapUiTinyMarginBegin")
+                                ]
+                            })
+                        ]
+                    }).addStyleClass("sapUiMediumMarginTop sapUiSmallMarginBottom")
+                ]
+            });
+
+            // Documents section
+            var oDocumentsSection = new VBox({
+                width: "100%",
+                items: [
+                    new Text({
+                        text: "Click on a row to view document details in validation page"
+                    }).addStyleClass("sapUiSmallMarginBottom"),
+                    oDocumentsTable
+                ]
+            });
+
+            // Main content
+            var oMainContent = new VBox({
+                width: "95%",
+                items: [
+                    oHeader,
+                    oDocumentsSection
+                ],
+                alignItems: "Start"
+            }).addStyleClass("sapUiContentPadding");
+
+            // Create page
+            var oPage = new Page({
+                title: "Document Monitoring",
+                showHeader: true,
+                showNavButton: true,
+                navButtonPress: function() {
+                    window.location.href = "./index.html";
+                },
+                content: [
+                    new VBox({
+                        width: "100%",
+                        items: [oMainContent],
+                        alignItems: "Center"
+                    })
+                ]
+            });
+
+            // Create app
+            var oApp = new App({
+                pages: [oPage]
+            });
+
+            oApp.placeAt("content");
+
+            // Auto-load documents on init
+            loadAllDocuments();
+        });
+    </script>
+</head>
+<body class="sapUiBody sapUiSizeCompact">
+    <div id="content"></div>
+</body>
+</html>

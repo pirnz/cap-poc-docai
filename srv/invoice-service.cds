@@ -121,6 +121,7 @@ service InvoiceProcessingService @(path: '/invoice') {
     };
     documentConfidence: Decimal;
     fileData: LargeString;
+    extractionSource: String;
   };
 
   action pollAndProcessDocument(

@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DocAI Document Ingestion</title>
+    <script
+        id="sap-ui-bootstrap"
+        src="https://ui5.sap.com/1.120.0/resources/sap-ui-core.js"
+        data-sap-ui-theme="sap_horizon"
+        data-sap-ui-libs="sap.m,sap.ui.core,sap.ui.unified"
+        data-sap-ui-async="true"
+        data-sap-ui-compatVersion="edge"
+        data-sap-ui-xx-waitForTheme="true"
+    ></script>
+    <script>
+        sap.ui.require([
+            "sap/m/App",
+            "sap/m/Page",
+            "sap/m/VBox",
+            "sap/m/HBox",
+            "sap/m/Title",
+            "sap/m/Label",
+            "sap/m/Text",
+            "sap/m/Input",
+            "sap/m/Button",
+            "sap/m/MessageToast",
+            "sap/m/MessageBox",
+            "sap/m/ProgressIndicator",
+            "sap/m/Panel",
+            "sap/ui/unified/FileUploader",
+            "sap/m/ComboBox",
+            "sap/m/Select",
+            "sap/ui/core/Item",
+            "sap/ui/model/json/JSONModel",
+            "sap/m/FlexItemData"
+        ], function (App, Page, VBox, HBox, Title, Label, Text, Input, Button, MessageToast, MessageBox, ProgressIndicator, Panel, FileUploader, ComboBox, Select, Item, JSONModel, FlexItemData) {
+
+            // JSON model for clients
+            var oClientsModel = new JSONModel({
+                clients: [],
+                selectedClient: null,
+                loading: false
+            });
+
+            // JSON model for schema versions
+            var oSchemaVersionsModel = new JSONModel({
+                schemaVersions: [],
+                selectedSchemaVersionId: null,
+                loading: false
+            });
+
+            // Helper function: Generate UUID
+            function generateUUID() {
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    var r = Math.random() * 16 | 0;
+                    var v = c === 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            }
+
+            // Load available clients from schemas
+            function loadClients() {
+                oClientsModel.setProperty("/loading", true);
+
+                fetch("./odata/invoice/getSchemaClients", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({})
+                })
+                .then(function(response) {
+                    if (!response.ok) throw new Error("Failed to load clients");
+                    return response.json();
+                })
+                .then(function(data) {
+                    var uniqueClients = data.clients || [];
+                    oClientsModel.setProperty("/clients", uniqueClients);
+                    oClientsModel.setProperty("/loading", false);
+
+                    // Auto-select "default" if available
+                    if (uniqueClients.indexOf("default") !== -1) {
+                        oClientsModel.setProperty("/selectedClient", "default");
+                        oClientComboBox.setSelectedKey("default");
+                    } else if (uniqueClients.length > 0) {
+                        oClientsModel.setProperty("/selectedClient", uniqueClients[0]);
+                        oClientComboBox.setSelectedKey(uniqueClients[0]);
+                    }
+
+                    MessageToast.show("Loaded " + uniqueClients.length + " clients");
+                })
+                .catch(function(error) {
+                    oClientsModel.setProperty("/loading", false);
+                    MessageToast.show("Failed to load clients: " + error.message);
+                });
+            }
+
+            // Load available schema versions
+            function loadSchemaVersions() {
+                oSchemaVersionsModel.setProperty("/loading", true);
+
+                fetch("./odata/invoice/getSchemaVersionsList", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({})
+                })
+                .then(function(response) {
+                    if (!response.ok) throw new Error("Failed to load schema versions");
+                    return response.json();
+                })
+                .then(function(data) {
+                    var schemaVersions = (data.schemaVersions || []).map(function(sv) {
+                        var parsed = JSON.parse(sv);
+                        // Add display name combining schema.name and version
+                        parsed.displayName = (parsed.schema && parsed.schema.name ? parsed.schema.name : parsed.label) + " (v" + parsed.version + ")";
+                        return parsed;
+                    });
+                    oSchemaVersionsModel.setProperty("/schemaVersions", schemaVersions);
+                    oSchemaVersionsModel.setProperty("/loading", false);
+
+                    // Auto-select first schema version if available
+                    if (schemaVersions.length > 0) {
+                        var firstId = schemaVersions[0].ID;
+                        oSchemaVersionsModel.setProperty("/selectedSchemaVersionId", firstId);
+                        oSchemaVersionSelect.setSelectedKey(firstId);
+                    }
+
+                    MessageToast.show("Loaded " + schemaVersions.length + " active schema versions");
+                })
+                .catch(function(error) {
+                    oSchemaVersionsModel.setProperty("/loading", false);
+                    MessageToast.show("Failed to load schema versions: " + error.message);
+                });
+            }
+
+            // Test API connection
+            function testConnection() {
+                oProgress.setVisible(true);
+                oProgress.setState("Information");
+                oProgress.setDisplayValue("Testing connection...");
+
+                fetch("./odata/invoice/testDocAI", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({})
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        oProgress.setVisible(false);
+                        MessageBox.error("Connection test failed: " + data.error.message);
+                    } else {
+                        oProgress.setVisible(false);
+                        MessageToast.show("Connection test completed successfully");
+                    }
+                })
+                .catch(error => {
+                    oProgress.setVisible(false);
+                    MessageBox.error("Connection test failed: " + error.message);
+                });
+            }
+
+            // Upload document to DocAI
+            function uploadDocument() {
+                var domRef = oFileUploader.getDomRef();
+                var file = domRef.querySelector('input[type="file"]').files[0];
+
+                if (!file) {
+                    MessageBox.warning("Please select a PDF file first");
+                    return;
+                }
+
+                var selectedSchemaVersionId = oSchemaVersionsModel.getProperty("/selectedSchemaVersionId");
+                var selectedClient = oClientComboBox.getValue() || oClientsModel.getProperty("/selectedClient");
+
+                if (!selectedSchemaVersionId) {
+                    MessageBox.warning("Please select a schema version");
+                    return;
+                }
+
+                if (!selectedClient) {
+                    MessageBox.warning("Please enter or select a client ID");
+                    return;
+                }
+
+                oProgress.setVisible(true);
+                oProgress.setPercentValue(10);
+                oProgress.setState("Information");
+                oProgress.setDisplayValue("Reading file...");
+
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    var fileContent = e.target.result.split(',')[1];
+
+                    oProgress.setPercentValue(30);
+                    oProgress.setDisplayValue("Creating batch...");
+
+                    // Step 1: Upload file to create batch + document in database
+                    var uploadData = {
+                        fileName: file.name,
+                        fileContent: fileContent,
+                        mimeType: file.type || 'application/pdf',
+                        schemaId: selectedSchemaVersionId
+                    };
+
+                    fetch("./odata/invoice/uploadFile", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify(uploadData)
+                    })
+                    .then(response => response.json())
+                    .then(batchData => {
+                        if (batchData.error) {
+                            throw new Error(batchData.error.message || "Batch creation failed");
+                        }
+
+                        var batchId = batchData.ID;
+                        console.log("Batch created:", batchId);
+
+                        oProgress.setPercentValue(50);
+                        oProgress.setDisplayValue("Fetching documents...");
+
+                        // Step 2: Get document IDs from the batch
+                        return fetch("./odata/invoice/ProcessingBatches(" + batchId + ")?$expand=documents")
+                            .then(response => response.json())
+                            .then(batch => {
+                                if (!batch.documents || batch.documents.length === 0) {
+                                    throw new Error("No documents found in batch");
+                                }
+
+                                oProgress.setPercentValue(70);
+                                oProgress.setDisplayValue("Processing documents...");
+
+                                // Step 3: Process each document (send to DocAI)
+                                var processPromises = batch.documents.map(function(doc) {
+                                    return fetch("./odata/invoice/processDocument", {
+                                        method: "POST",
+                                        headers: {
+                                            "Content-Type": "application/json"
+                                        },
+                                        body: JSON.stringify({
+                                            documentId: doc.ID
+                                        })
+                                    })
+                                    .then(response => response.json())
+                                    .then(result => {
+                                        console.log("Document processed:", doc.ID, result);
+                                        return result;
+                                    });
+                                });
+
+                                return Promise.all(processPromises);
+                            });
+                    })
+                    .then(results => {
+                        oProgress.setPercentValue(100);
+                        oProgress.setState("Success");
+                        oProgress.setDisplayValue("Documents uploaded and processing!");
+
+                        var docCount = results.length;
+                        var message = docCount === 1
+                            ? "Document uploaded successfully!\n\nProcessing 1 document.\n\nRedirecting to monitoring..."
+                            : "Documents uploaded successfully!\n\nProcessing " + docCount + " documents.\n\nRedirecting to monitoring...";
+
+                        MessageBox.success(message, {
+                            onClose: function() {
+                                window.location.href = './monitoring.html';
+                            }
+                        });
+
+                        // Also redirect after 2 seconds if user doesn't close the dialog
+                        setTimeout(function() {
+                            window.location.href = './monitoring.html';
+                        }, 2000);
+                    })
+                    .catch(error => {
+                        oProgress.setPercentValue(0);
+                        oProgress.setState("Error");
+                        oProgress.setDisplayValue("Upload failed");
+                        MessageBox.error("Upload failed: " + error.message);
+                        console.error("Upload error:", error);
+                    });
+                };
+
+                reader.readAsDataURL(file);
+            }
+
+            // Client ComboBox
+            var oClientComboBox = new ComboBox({
+                width: "100%",
+                placeholder: "Select or enter client ID",
+                selectedKey: "{clients>/selectedClient}",
+                change: function(oEvent) {
+                    var value = oEvent.getParameter("value");
+                    oClientsModel.setProperty("/selectedClient", value);
+                },
+                items: {
+                    path: "clients>/clients",
+                    template: new Item({
+                        key: "{clients>}",
+                        text: "{clients>}"
+                    })
+                }
+            }).setModel(oClientsModel, "clients");
+
+            // Refresh clients button
+            var oRefreshClientsButton = new Button({
+                icon: "sap-icon://refresh",
+                tooltip: "Refresh clients",
+                press: loadClients
+            });
+
+            // Schema version selector
+            var oSchemaVersionSelect = new Select({
+                width: "100%",
+                selectedKey: "{schemaVersions>/selectedSchemaVersionId}",
+                change: function(oEvent) {
+                    var selectedKey = oEvent.getParameter("selectedItem").getKey();
+                    oSchemaVersionsModel.setProperty("/selectedSchemaVersionId", selectedKey);
+                },
+                items: {
+                    path: "schemaVersions>/schemaVersions",
+                    template: new Item({
+                        key: "{schemaVersions>ID}",
+                        text: "{schemaVersions>displayName}"
+                    })
+                }
+            }).setModel(oSchemaVersionsModel, "schemaVersions");
+
+            // Refresh schema versions button
+            var oRefreshSchemaVersionsButton = new Button({
+                icon: "sap-icon://refresh",
+                tooltip: "Refresh schema versions",
+                press: loadSchemaVersions
+            });
+
+            // OCR Engine input
+            var oOcrEngineInput = new Input({
+                value: "Document",
+                placeholder: "Document or SceneText",
+                width: "100%"
+            });
+
+            // File uploader
+            var oFileUploader = new FileUploader({
+                name: "pdfFile",
+                uploadUrl: "upload",
+                placeholder: "Choose PDF file...",
+                fileType: ["pdf"],
+                mimeType: ["application/pdf"],
+                buttonText: "Browse",
+                width: "100%",
+                change: function(oEvent) {
+                    var fileName = oEvent.getParameter("newValue");
+                    if (fileName) {
+                        MessageToast.show("File selected: " + fileName);
+                    }
+                }
+            });
+
+            // Progress indicator
+            var oProgress = new ProgressIndicator({
+                visible: false,
+                percentValue: 0,
+                displayValue: "Idle",
+                width: "100%",
+                state: "None"
+            });
+
+            // Load data on init
+            loadClients();
+            loadSchemaVersions();
+
+            // Configuration panel
+            var oConfigPanel = new Panel({
+                headerText: "DocAI Configuration",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [
+                        new Label({ text: "Client ID", required: true }),
+                        new HBox({
+                            items: [
+                                oClientComboBox,
+                                oRefreshClientsButton.addStyleClass("sapUiTinyMarginBegin")
+                            ],
+                            width: "100%"
+                        }),
+                        new Text({
+                            text: "Select from list or enter custom client ID"
+                        }).addStyleClass("sapUiTinyMarginTop"),
+                        new Label({ text: "Schema Version", required: true }).addStyleClass("sapUiSmallMarginTop"),
+                        new HBox({
+                            width: "100%",
+                            items: [
+                                oSchemaVersionSelect.setLayoutData(new FlexItemData({ growFactor: 1 })),
+                                oRefreshSchemaVersionsButton.addStyleClass("sapUiTinyMarginBegin")
+                            ]
+                        }),
+                        new Label({ text: "OCR Engine" }).addStyleClass("sapUiSmallMarginTop"),
+                        oOcrEngineInput,
+                        new Text({
+                            text: "Allowed values: 'Document' or 'SceneText'"
+                        }).addStyleClass("sapUiTinyMarginTop"),
+                        new HBox({
+                            items: [
+                                new Button({
+                                    text: "Test Connection",
+                                    icon: "sap-icon://validate",
+                                    press: testConnection
+                                })
+                            ]
+                        }).addStyleClass("sapUiSmallMarginTop")
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Upload panel
+            var oUploadPanel = new Panel({
+                headerText: "Document Upload",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [
+                        new Label({ text: "Select PDF File", required: true }),
+                        oFileUploader,
+                        oProgress.addStyleClass("sapUiSmallMarginTop"),
+                        new HBox({
+                            items: [
+                                new Button({
+                                    text: "Upload to DocAI",
+                                    type: "Emphasized",
+                                    icon: "sap-icon://upload",
+                                    press: uploadDocument
+                                })
+                            ]
+                        }).addStyleClass("sapUiSmallMarginTop"),
+                        new Text({
+                            text: "After successful upload, you will be redirected to the monitoring page."
+                        }).addStyleClass("sapUiSmallMarginTop")
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Main content
+            var oMainContent = new VBox({
+                width: "95%",
+                items: [
+                    new Title({
+                        text: "DocAI Document Ingestion",
+                        level: "H2"
+                    }).addStyleClass("sapUiMediumMarginTop"),
+                    new Text({
+                        text: "Configure and upload documents to SAP Document Information Extraction API"
+                    }).addStyleClass("sapUiTinyMarginTop sapUiSmallMarginBottom"),
+                    oConfigPanel,
+                    oUploadPanel
+                ],
+                alignItems: "Center"
+            }).addStyleClass("sapUiContentPadding");
+
+            // Create page
+            var oPage = new Page({
+                title: "DocAI Document Ingestion",
+                showHeader: true,
+                showNavButton: true,
+                navButtonPress: function() {
+                    window.location.href = "./index.html";
+                },
+                content: [oMainContent]
+            });
+
+            // Create app
+            var oApp = new App({
+                pages: [oPage]
+            });
+
+            oApp.placeAt("content");
+        });
+    </script>
+</head>
+<body class="sapUiBody sapUiSizeCompact">
+    <div id="content"></div>
+</body>
+</html>

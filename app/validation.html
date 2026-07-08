@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Validation - DocAI</title>
+    <script
+        id="sap-ui-bootstrap"
+        src="https://ui5.sap.com/1.120.0/resources/sap-ui-core.js"
+        data-sap-ui-theme="sap_horizon"
+        data-sap-ui-libs="sap.m,sap.ui.core,sap.ui.unified"
+        data-sap-ui-async="true"
+        data-sap-ui-compatVersion="edge"
+        data-sap-ui-xx-waitForTheme="true"
+    ></script>
+    <script>
+        sap.ui.require([
+            "sap/m/App",
+            "sap/m/Page",
+            "sap/m/VBox",
+            "sap/m/HBox",
+            "sap/m/Title",
+            "sap/m/Label",
+            "sap/m/Text",
+            "sap/m/Input",
+            "sap/m/TextArea",
+            "sap/m/Button",
+            "sap/m/MessageToast",
+            "sap/m/MessageBox",
+            "sap/m/ProgressIndicator",
+            "sap/m/Panel",
+            "sap/ui/core/Icon",
+            "sap/m/ObjectStatus",
+            "sap/ui/model/json/JSONModel",
+            "sap/ui/core/HTML",
+            "sap/m/FlexItemData"
+        ], function (App, Page, VBox, HBox, Title, Label, Text, Input, TextArea, Button, MessageToast, MessageBox, ProgressIndicator, Panel, Icon, ObjectStatus, JSONModel, HTML, FlexItemData) {
+
+            // State variables
+            var currentDocumentId = null;
+            var currentSchemaVersionId = null;
+            var pollingInterval = null;
+            var schemaFields = {};
+            var documentEntities = { headerFields: [], lineItems: [], documentConfidence: 0 };
+            var editedEntities = {};
+            var pdfData = null;
+            var extractionSource = null;
+
+            // Parse URL parameters
+            function getUrlParameter(name) {
+                var urlParams = new URLSearchParams(window.location.search);
+                return urlParams.get(name);
+            }
+
+            // Get document ID from URL
+            var urlDocId = getUrlParameter('docId') || getUrlParameter('docaiDocumentId');
+
+            // Progress indicator
+            var oProgress = new ProgressIndicator({
+                visible: false,
+                percentValue: 0,
+                displayValue: "Idle",
+                width: "100%",
+                state: "None"
+            });
+
+            // Response display for logs
+            var oResponseArea = new TextArea({
+                width: "100%",
+                rows: 15,
+                editable: false,
+                placeholder: "Document logs will appear here..."
+            });
+
+            // Document ID display
+            var oDocumentIdText = new Text({
+                text: ""
+            }).addStyleClass("sapUiSmallMarginTop");
+
+            // Extraction source indicator
+            var oExtractionSourceText = new Text({
+                text: ""
+            }).addStyleClass("sapUiSmallMarginTop");
+
+            // Log function
+            function log(message, isError) {
+                var timestamp = new Date().toLocaleTimeString();
+                var prefix = isError ? "❌ ERROR" : "✅";
+                var line = `[${timestamp}] ${prefix} ${message}\n`;
+                oResponseArea.setValue(oResponseArea.getValue() + line);
+            }
+
+            function logJson(label, data) {
+                var timestamp = new Date().toLocaleTimeString();
+                var line = `[${timestamp}] 📋 ${label}:\n${JSON.stringify(data, null, 2)}\n\n`;
+                oResponseArea.setValue(oResponseArea.getValue() + line);
+            }
+
+            // Update progress indicator
+            function updateProgress(status) {
+                oProgress.setVisible(true);
+
+                if (status === "PENDING" || status === "processing") {
+                    oProgress.setPercentValue(50);
+                    oProgress.setState("Information");
+                    oProgress.setDisplayValue("Processing...");
+                } else if (status === "reviewNeeded") {
+                    oProgress.setPercentValue(80);
+                    oProgress.setState("Warning");
+                    oProgress.setDisplayValue("Review needed");
+                } else if (status === "confirmed" || status === "readyForPosting") {
+                    oProgress.setPercentValue(100);
+                    oProgress.setState("Success");
+                    oProgress.setDisplayValue("Confirmed");
+                } else if (status === "failed" || status === "ERROR" || status === "FAILED") {
+                    oProgress.setPercentValue(100);
+                    oProgress.setState("Error");
+                    oProgress.setDisplayValue("Failed");
+                } else if (status === "DONE" || status === "SUCCEEDED") {
+                    oProgress.setPercentValue(100);
+                    oProgress.setState("Success");
+                    oProgress.setDisplayValue("Processing complete");
+                } else {
+                    oProgress.setPercentValue(70);
+                    oProgress.setState("Information");
+                    oProgress.setDisplayValue(status || "Processing");
+                }
+            }
+
+            // Check document status
+            function checkStatus() {
+                if (!currentDocumentId) {
+                    MessageBox.warning("No document ID available.");
+                    return;
+                }
+
+                log("Checking status for: " + currentDocumentId, false);
+
+                fetch("./odata/invoice/getDocAIStatus", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        documentId: currentDocumentId
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    var newStatus = data.status;
+                    log("Status retrieved: " + newStatus, false);
+                    logJson("Status details", data);
+
+                    updateProgress(newStatus);
+                    updateButtonStates(newStatus);
+
+                    if (newStatus === "DONE" || newStatus === "SUCCEEDED" || newStatus === "reviewNeeded") {
+                        stopPolling();
+                        MessageBox.success("Document processing completed!");
+                    } else if (newStatus === "FAILED" || newStatus === "ERROR") {
+                        stopPolling();
+                        MessageBox.error("Document processing failed");
+                    }
+                })
+                .catch(error => {
+                    log("Status check failed: " + error.message, true);
+                    MessageToast.show("Status check failed");
+                });
+            }
+
+            // Get confidence state
+            function getConfidenceState(confidence) {
+                if (confidence < 0.5) return "Error";
+                if (confidence < 0.8) return "Warning";
+                return "Success";
+            }
+
+            // Fetch schema field definitions
+            function fetchSchemaFields(schemaVersionId) {
+                log("Fetching schema fields for version ID: " + schemaVersionId, false);
+
+                return fetch("./odata/invoice/getSchemaFields", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        schemaVersionId: schemaVersionId
+                    })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        schemaFields = {};
+                        var fields = (data.fields || []).map(f => JSON.parse(f));
+                        if (fields.length > 0) {
+                            fields.forEach(field => {
+                                schemaFields[field.name] = {
+                                    label: field.label || field.name,
+                                    dataType: field.dataType,
+                                    ID: field.ID
+                                };
+                            });
+                            log("Loaded " + fields.length + " schema field definitions", false);
+                        }
+                        return schemaFields;
+                    })
+                    .catch(error => {
+                        log("Failed to fetch schema fields: " + error.message, true);
+                        throw error;
+                    });
+            }
+
+            // Fetch document extraction results
+            function fetchDocumentEntities(documentId) {
+                log("Fetching document entities for ID: " + documentId, false);
+
+                return fetch("./odata/invoice/getDocAIResults", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        documentId: documentId
+                    })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            throw new Error(data.error.message || "Failed to fetch results");
+                        }
+
+                        // Store PDF file data
+                        if (data.fileData) {
+                            pdfData = data.fileData;
+                            log("PDF file data loaded", false);
+                        }
+
+                        // Store extraction source
+                        extractionSource = data.extractionSource || 'api';
+
+                        // Store structured format
+                        if (data.headerFields && data.lineItems) {
+                            log("Loaded " + data.headerFields.length + " header fields and " + data.lineItems.length + " line items", false);
+                            log("Extraction source: " + extractionSource, false);
+
+                            return {
+                                headerFields: data.headerFields,
+                                lineItems: data.lineItems,
+                                documentConfidence: data.documentConfidence,
+                                extractionSource: extractionSource
+                            };
+                        } else {
+                            log("No structured data found in response", true);
+                        }
+
+                        return { headerFields: [], lineItems: [], documentConfidence: 0, extractionSource: 'unknown' };
+                    })
+                    .catch(error => {
+                        log("Failed to fetch document entities: " + error.message, true);
+                        throw error;
+                    });
+            }
+
+            // Build extraction results content
+            function buildResultsContent() {
+                oExtractionResultsContent.destroyItems();
+                editedEntities = {};
+
+                // Document confidence
+                var docConfidence = documentEntities.documentConfidence || 0;
+                var docConfidenceText = Math.round(docConfidence * 100) + "%";
+                var docConfidenceState = getConfidenceState(docConfidence);
+
+                var oDocConfidenceStatus = new ObjectStatus({
+                    text: "Document Confidence: " + docConfidenceText,
+                    state: docConfidenceState
+                });
+
+                oExtractionResultsContent.addItem(oDocConfidenceStatus);
+                oExtractionResultsContent.addItem(new Text({ text: "" }).addStyleClass("sapUiSmallMarginTop"));
+
+                var headerFields = documentEntities.headerFields || [];
+                var lineItems = documentEntities.lineItems || [];
+
+                // Render header fields in a panel
+                if (headerFields.length > 0) {
+                    var oHeaderPanel = new Panel({
+                        headerText: "Header Information (" + headerFields.length + " fields)",
+                        expandable: true,
+                        expanded: true,
+                        content: new VBox({ items: [] })
+                    }).addStyleClass("sapUiSmallMarginTop");
+
+                    var oHeaderContent = oHeaderPanel.getContent()[0];
+
+                    headerFields.forEach(function(entity) {
+                        var fieldDef = schemaFields[entity.name] || {};
+                        var fieldLabel = entity.label || fieldDef.label || entity.name;
+                        var dataType = entity.dataType || fieldDef.dataType;
+
+                        var fieldValue = "";
+                        if (dataType === "Number") {
+                            fieldValue = entity.numberValue !== null && entity.numberValue !== undefined ? String(entity.numberValue) : "";
+                        } else if (dataType === "Date") {
+                            fieldValue = entity.dateValue || "";
+                        } else {
+                            fieldValue = entity.stringValue || "";
+                        }
+
+                        var oFieldInput = new Input({
+                            value: fieldValue,
+                            width: "100%",
+                            change: (function(ent, origVal) {
+                                return function(oEvent) {
+                                    var newValue = oEvent.getParameter("value");
+                                    editedEntities[ent.ID] = {
+                                        entity: ent,
+                                        originalValue: origVal,
+                                        editedValue: newValue,
+                                        modified: newValue !== origVal
+                                    };
+                                };
+                            })(entity, fieldValue)
+                        });
+
+                        var confidence = entity.confidence || 0;
+                        var confidenceText = Math.round(confidence * 100) + "%";
+                        var confidenceState = getConfidenceState(confidence);
+
+                        var oConfidenceStatus = new ObjectStatus({
+                            text: confidenceText,
+                            state: confidenceState,
+                            width: "80px"
+                        });
+
+                        var oFieldRow = new HBox({
+                            width: "100%",
+                            alignItems: "Center",
+                            items: [
+                                new Label({
+                                    text: fieldLabel,
+                                    width: "200px"
+                                }).addStyleClass("sapUiSmallMarginEnd"),
+                                oFieldInput.setLayoutData(new FlexItemData({ growFactor: 1 })).addStyleClass("sapUiSmallMarginEnd"),
+                                oConfidenceStatus
+                            ]
+                        }).addStyleClass("sapUiTinyMarginTop");
+
+                        oHeaderContent.addItem(oFieldRow);
+                    });
+
+                    oExtractionResultsContent.addItem(oHeaderPanel);
+                }
+
+                // Render line items as a table
+                if (lineItems.length > 0) {
+                    var oLineItemsPanel = new Panel({
+                        headerText: "Line Items (" + lineItems.length + " rows)",
+                        expandable: true,
+                        expanded: true,
+                        content: new VBox({ items: [] })
+                    }).addStyleClass("sapUiSmallMarginTop");
+
+                    var oLineItemsContent = oLineItemsPanel.getContent()[0];
+
+                    // Create table header
+                    var oHeaderRow = new HBox({
+                        width: "100%",
+                        items: [
+                            new Label({ text: "#", width: "40px" }).addStyleClass("sapUiSmallMarginEnd"),
+                            new Label({ text: "Description", width: "300px" }).addStyleClass("sapUiSmallMarginEnd"),
+                            new Label({ text: "Qty", width: "80px" }).addStyleClass("sapUiSmallMarginEnd"),
+                            new Label({ text: "Unit Price", width: "120px" }).addStyleClass("sapUiSmallMarginEnd"),
+                            new Label({ text: "Net Amount", width: "120px" }).addStyleClass("sapUiSmallMarginEnd"),
+                            new Label({ text: "Confidence", width: "80px" })
+                        ]
+                    }).addStyleClass("sapUiSmallMarginTop");
+
+                    oLineItemsContent.addItem(oHeaderRow);
+
+                    // Create table rows
+                    lineItems.forEach(function(lineItem) {
+                        var occurrence = lineItem.occurrence;
+                        var fields = lineItem.fields || [];
+
+                        // Build field map by name
+                        var fieldMap = {};
+                        fields.forEach(function(f) {
+                            fieldMap[f.name] = f;
+                        });
+
+                        var columnNames = ["description", "quantity", "unitPrice", "netAmount"];
+                        var cells = [
+                            new Text({ text: occurrence, width: "40px" })
+                        ];
+
+                        var avgConfidence = 0;
+                        var confidenceCount = 0;
+
+                        columnNames.forEach(function(colName) {
+                            var entity = fieldMap[colName];
+                            var width = colName === "description" ? "300px" : (colName === "quantity" ? "80px" : "120px");
+
+                            if (entity) {
+                                var dataType = entity.dataType;
+
+                                var fieldValue = "";
+                                if (dataType === "Number") {
+                                    fieldValue = entity.numberValue !== null && entity.numberValue !== undefined ? String(entity.numberValue) : "";
+                                } else if (dataType === "Date") {
+                                    fieldValue = entity.dateValue || "";
+                                } else {
+                                    fieldValue = entity.stringValue || "";
+                                }
+
+                                var oFieldInput = new Input({
+                                    value: fieldValue,
+                                    width: width,
+                                    change: (function(e, origVal) {
+                                        return function(oEvent) {
+                                            var newValue = oEvent.getParameter("value");
+                                            editedEntities[e.ID] = {
+                                                entity: e,
+                                                originalValue: origVal,
+                                                editedValue: newValue,
+                                                modified: newValue !== origVal
+                                            };
+                                        };
+                                    })(entity, fieldValue)
+                                });
+
+                                cells.push(oFieldInput);
+
+                                if (entity.confidence !== null && entity.confidence !== undefined) {
+                                    avgConfidence += entity.confidence;
+                                    confidenceCount++;
+                                }
+                            } else {
+                                cells.push(new Input({ value: "", width: width, enabled: false }));
+                            }
+                        });
+
+                        // Calculate average confidence for this line
+                        var lineConfidence = confidenceCount > 0 ? avgConfidence / confidenceCount : 0;
+                        var lineConfidenceText = Math.round(lineConfidence * 100) + "%";
+                        var lineConfidenceState = getConfidenceState(lineConfidence);
+
+                        cells.push(new ObjectStatus({
+                            text: lineConfidenceText,
+                            state: lineConfidenceState,
+                            width: "80px"
+                        }));
+
+                        var oLineRow = new HBox({
+                            width: "100%",
+                            alignItems: "Center",
+                            items: cells.map(function(cell, idx) {
+                                return cell.addStyleClass(idx < cells.length - 1 ? "sapUiSmallMarginEnd" : "");
+                            })
+                        }).addStyleClass("sapUiTinyMarginTop");
+
+                        oLineItemsContent.addItem(oLineRow);
+                    });
+
+                    oExtractionResultsContent.addItem(oLineItemsPanel);
+                }
+            }
+
+            // Get extraction results
+            function getResults() {
+                if (!currentDocumentId) {
+                    MessageBox.warning("No document ID available.");
+                    return;
+                }
+
+                log("Fetching extraction results...", false);
+
+                oExtractionResultsPanel.setVisible(false);
+                oPdfViewerPanel.setVisible(false);
+
+                // If no schema version ID, try to get it from DocAI status
+                var schemaPromise;
+                if (!currentSchemaVersionId) {
+                    log("No schema version ID, fetching from DocAI...", false);
+                    schemaPromise = fetch("./odata/invoice/getDocAIStatus", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ documentId: currentDocumentId })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        var details = data.details ? JSON.parse(data.details) : {};
+                        var schemaVersionId = details.schemaVersionId || details.schemaVersion?.ID;
+
+                        if (schemaVersionId) {
+                            log("Found schema version ID: " + schemaVersionId, false);
+                            currentSchemaVersionId = schemaVersionId;
+                            return schemaVersionId;
+                        } else {
+                            log("No schema version ID in DocAI response", true);
+                            return null;
+                        }
+                    })
+                    .catch(error => {
+                        log("Failed to get schema from DocAI: " + error.message, true);
+                        return null;
+                    });
+                } else {
+                    schemaPromise = Promise.resolve(currentSchemaVersionId);
+                }
+
+                schemaPromise
+                    .then(function(schemaVersionId) {
+                        if (schemaVersionId) {
+                            return fetchSchemaFields(schemaVersionId);
+                        } else {
+                            schemaFields = {};
+                            return Promise.resolve();
+                        }
+                    })
+                    .then(function() {
+                        return fetchDocumentEntities(currentDocumentId);
+                    })
+                    .then(function(results) {
+                        documentEntities = results;
+
+                        // Update extraction source display
+                        const sourceText = results.extractionSource === 'api' ? '📡 Data source: DocAI API' :
+                                         results.extractionSource === 'callback' ? '📨 Data source: Callback' :
+                                         results.extractionSource === 'local' ? '💾 Data source: Local (from callback)' :
+                                         '';
+                        oExtractionSourceText.setText(sourceText);
+
+                        if (!results || (!results.headerFields || results.headerFields.length === 0) && (!results.lineItems || results.lineItems.length === 0)) {
+                            MessageBox.information("No extraction results found for this document.");
+                            return;
+                        }
+
+                        buildResultsContent();
+                        oExtractionResultsPanel.setVisible(true);
+
+                        // Display PDF if available
+                        if (pdfData) {
+                            log("Displaying PDF in viewer...", false);
+                            displayPdf(pdfData);
+                        } else {
+                            log("No PDF data available to display", false);
+                        }
+
+                        log("Extraction results displayed successfully", false);
+                        MessageToast.show("Extraction results loaded");
+                    })
+                    .catch(function(error) {
+                        log("Failed to get results: " + error.message, true);
+                        MessageBox.error("Failed to get results: " + error.message);
+                    });
+            }
+
+            // Display PDF in viewer
+            function displayPdf(base64Data) {
+                if (!base64Data) {
+                    log("No PDF data available", true);
+                    return;
+                }
+
+                // Make panel visible first to ensure iframe is rendered
+                oPdfViewerPanel.setVisible(true);
+
+                // Use setTimeout to ensure iframe is in DOM and ready
+                setTimeout(function() {
+                    var pdfViewer = document.getElementById("pdfViewer");
+                    if (pdfViewer) {
+                        try {
+                            pdfViewer.src = "data:application/pdf;base64," + base64Data;
+                            log("PDF loaded in viewer", false);
+                        } catch (error) {
+                            log("Failed to load PDF: " + error.message, true);
+                        }
+                    } else {
+                        log("PDF viewer iframe not found in DOM", true);
+                    }
+                }, 100);
+            }
+
+            // Confirm document
+            function confirmDocument() {
+                if (!currentDocumentId) {
+                    MessageBox.warning("No document ID available.");
+                    return;
+                }
+
+                log("Starting confirmation workflow...", false);
+
+                var modifiedEntityIds = Object.keys(editedEntities).filter(id => editedEntities[id].modified);
+
+                // Prepare entities array for the action
+                var entitiesPayload = modifiedEntityIds.map(entityId => {
+                    var editInfo = editedEntities[entityId];
+                    var entity = editInfo.entity;
+
+                    var entityUpdate = {
+                        entityId: entity.ID,
+                        stringValue: null,
+                        numberValue: null,
+                        dateValue: null
+                    };
+
+                    // Set the appropriate value field based on dataType
+                    if (entity.dataType === "Number") {
+                        entityUpdate.numberValue = parseFloat(editInfo.editedValue) || 0;
+                    } else if (entity.dataType === "Date") {
+                        entityUpdate.dateValue = editInfo.editedValue;
+                    } else {
+                        entityUpdate.stringValue = editInfo.editedValue;
+                    }
+
+                    return entityUpdate;
+                });
+
+                if (entitiesPayload.length > 0) {
+                    log("Updating " + entitiesPayload.length + " edited entities and confirming...", false);
+                } else {
+                    log("No edited entities, confirming document...", false);
+                }
+
+                // Call the CAP action that updates and confirms
+                fetch("./odata/invoice/updateAndConfirmDocument", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        documentId: currentDocumentId,
+                        entities: entitiesPayload,
+                        useForInstantLearning: false
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => {
+                            throw new Error(err.error?.message || "Update and confirmation failed (HTTP " + response.status + ")");
+                        });
+                    }
+                    return response.json();
+                })
+                .then(result => {
+                    log("Document updated and confirmed successfully!", false);
+                    logJson("Confirmation result", result);
+                    MessageBox.success("Document updated and confirmed successfully!");
+
+                    // Update status display
+                    oProgress.setState("Success");
+                    oProgress.setDisplayValue("Confirmed");
+
+                    // Update button states
+                    updateButtonStates("confirmed");
+                })
+                .catch(error => {
+                    log("Confirmation failed: " + error.message, true);
+                    MessageBox.error("Confirmation failed: " + error.message);
+                });
+            }
+
+            // Update button states based on status
+            function updateButtonStates(status) {
+                oCheckStatusButton.setEnabled(!!currentDocumentId);
+
+                var canGetResults = !!currentDocumentId &&
+                                  (status === "reviewNeeded" ||
+                                   status === "DONE" ||
+                                   status === "SUCCEEDED" ||
+                                   status === "readyForPosting" ||
+                                   status === "confirmed");
+                oGetResultsButton.setEnabled(canGetResults);
+
+                var canConfirm = !!currentDocumentId &&
+                               (status === "reviewNeeded" ||
+                                status === "readyForPosting");
+                oConfirmButton.setEnabled(canConfirm);
+            }
+
+            // Start polling
+            function startPolling() {
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                }
+
+                log("Starting automatic polling (every 5 seconds)...", false);
+                pollingInterval = setInterval(checkStatus, 5000);
+            }
+
+            // Stop polling
+            function stopPolling() {
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                    pollingInterval = null;
+                    log("Polling stopped", false);
+                }
+            }
+
+            // Get Results button
+            var oGetResultsButton = new Button({
+                text: "Get Results",
+                icon: "sap-icon://download",
+                enabled: false,
+                press: getResults
+            });
+
+            // Check Status button
+            var oCheckStatusButton = new Button({
+                text: "Check Status",
+                icon: "sap-icon://refresh",
+                enabled: false,
+                press: checkStatus
+            });
+
+            // Status panel
+            var oStatusPanel = new Panel({
+                headerText: "Processing Status",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [
+                        oProgress,
+                        oDocumentIdText,
+                        oExtractionSourceText,
+                        new HBox({
+                            items: [
+                                oCheckStatusButton,
+                                oGetResultsButton.addStyleClass("sapUiTinyMarginBegin"),
+                                new Button({
+                                    text: "Start Polling",
+                                    icon: "sap-icon://play",
+                                    press: startPolling
+                                }).addStyleClass("sapUiTinyMarginBegin"),
+                                new Button({
+                                    text: "Stop Polling",
+                                    icon: "sap-icon://stop",
+                                    press: stopPolling
+                                }).addStyleClass("sapUiTinyMarginBegin")
+                            ]
+                        }).addStyleClass("sapUiSmallMarginTop")
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Response panel for logs
+            var oResponsePanel = new Panel({
+                headerText: "Document Log",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [
+                        oResponseArea
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Extraction Results panel
+            var oExtractionResultsContent = new VBox({
+                items: []
+            }).addStyleClass("sapUiSmallMargin");
+
+            var oConfirmButton = new Button({
+                text: "Confirm",
+                type: "Emphasized",
+                icon: "sap-icon://accept",
+                enabled: false,
+                press: confirmDocument
+            });
+
+            var oExtractionResultsPanel = new Panel({
+                headerText: "Extraction Results",
+                expandable: true,
+                expanded: true,
+                visible: false,
+                content: new VBox({
+                    items: [
+                        oExtractionResultsContent,
+                        new HBox({
+                            alignItems: "Center",
+                            items: [
+                                oConfirmButton
+                            ]
+                        }).addStyleClass("sapUiSmallMarginTop")
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // PDF Viewer panel
+            var oPdfViewerPanel = new Panel({
+                headerText: "PDF Document",
+                expandable: true,
+                expanded: true,
+                visible: false,
+                content: new HTML({
+                    content: '<iframe id="pdfViewer" style="width:100%; height:800px; border:none;"></iframe>'
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Main content
+            var oMainContent = new VBox({
+                width: "100%",
+                items: [
+                    new HBox({
+                        width: "100%",
+                        justifyContent: "SpaceBetween",
+                        alignItems: "Center",
+                        items: [
+                            new Title({
+                                text: "Document Validation",
+                                level: "H2"
+                            }),
+                            new Button({
+                                text: "Back to Monitoring",
+                                icon: "sap-icon://nav-back",
+                                press: function() {
+                                    stopPolling();
+                                    window.location.href = './monitoring.html';
+                                }
+                            })
+                        ]
+                    }).addStyleClass("sapUiMediumMarginTop sapUiSmallMarginBottom"),
+                    oStatusPanel,
+                    oPdfViewerPanel,
+                    oExtractionResultsPanel,
+                    oResponsePanel
+                ],
+                alignItems: "Center"
+            }).addStyleClass("sapUiContentPadding");
+
+            // Create page
+            var oPage = new Page({
+                title: "Document Validation - DocAI",
+                showHeader: true,
+                showNavButton: true,
+                navButtonPress: function() {
+                    stopPolling();
+                    window.location.href = "./monitoring.html";
+                },
+                content: [oMainContent]
+            });
+
+            // Create app
+            var oApp = new App({
+                pages: [oPage]
+            });
+
+            oApp.placeAt("content");
+
+            // Initialize on load
+            if (urlDocId) {
+                currentDocumentId = urlDocId;
+                oDocumentIdText.setText("Document ID: " + currentDocumentId);
+                log("Loaded document ID from URL: " + currentDocumentId, false);
+
+                // Check status immediately
+                checkStatus();
+            } else {
+                MessageBox.error("No document ID provided in URL. Please use ?docId={uuid} or ?docaiDocumentId={guid}");
+                log("ERROR: No document ID in URL parameters", true);
+            }
+
+            // Cleanup on page unload
+            window.addEventListener('beforeunload', function() {
+                stopPolling();
+            });
+        });
+    </script>
+</head>
+<body class="sapUiBody sapUiSizeCompact">
+    <div id="content"></div>
+</body>
+</html>

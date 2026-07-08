@@ -218,13 +218,13 @@ module.exports = cds.service.impl(async function() {
 
     // Get batch to retrieve schemaId
     const batch = await SELECT.one.from(ProcessingBatches).where({ ID: doc.batch_ID });
-    const schemaId = batch?.schemaId || process.env.DOCAI_SCHEMA_VERSION_ID;
+    const schemaId = batch?.schemaId;
 
     console.log(`[DEBUG] processDocument - schemaId: ${schemaId}`);
 
     if (!schemaId) {
       console.log(`[ERROR] processDocument - No schema ID available`);
-      req.error(400, 'No schema ID available. Set schemaId in batch or DOCAI_SCHEMA_VERSION_ID environment variable');
+      req.error(400, 'No schema ID available. Set schemaId in batch');
     }
 
     try {
@@ -366,8 +366,6 @@ module.exports = cds.service.impl(async function() {
       { name: 'poNumber', label: 'PO Number' }
     ];
 
-    const confidenceThreshold = parseFloat(process.env.VALIDATION_CONFIDENCE_THRESHOLD || '0.85');
-    console.log(`[DEBUG] validateDocument - Confidence threshold: ${confidenceThreshold}`);
     const validationResults = [];
     const missingFields = [];
 
@@ -384,10 +382,6 @@ module.exports = cds.service.impl(async function() {
         isValid = false;
         errorMessage = `${field.label} is missing`;
         missingFields.push(field.label);
-        console.log(`[WARNING] validateDocument - ${errorMessage}`);
-      } else if (confidence < confidenceThreshold) {
-        isValid = false;
-        errorMessage = `${field.label} confidence (${confidence}) below threshold (${confidenceThreshold})`;
         console.log(`[WARNING] validateDocument - ${errorMessage}`);
       }
 
@@ -555,7 +549,7 @@ module.exports = cds.service.impl(async function() {
    */
   async function submitToDocAI(fileContent, fileName, schemaId) {
     console.log(`[INFO] submitToDocAI - fileName: ${fileName}, schemaId: ${schemaId}`);
-    const destinationName = process.env.DOCAI_DESTINATION || 'docai-destination';
+    const destinationName = 'docai-destination';
 
     if (!schemaId) {
       console.log(`[ERROR] submitToDocAI - schemaId is required`);
@@ -826,11 +820,10 @@ module.exports = cds.service.impl(async function() {
         : {};
 
       // Step 1: Get schema to determine correct clientId
-      // Use provided schemaId or fallback to environment variable
-      const schemaId = requestSchemaId || process.env.DOCAI_SCHEMA_VERSION_ID;
+      const schemaId = requestSchemaId;
       if (!schemaId) {
         console.log(`[ERROR] submitToDocAI action - schemaId is required`);
-        throw new Error('schemaId is required to create Document. Provide in request or set DOCAI_SCHEMA_VERSION_ID environment variable');
+        throw new Error('schemaId is required to create Document');
       }
       console.log('[INFO] submitToDocAI action - Using schemaId:', schemaId);
 
@@ -964,6 +957,7 @@ module.exports = cds.service.impl(async function() {
     console.log(`[INFO] getDocAIResults - destination: ${destinationName}, documentId: ${documentId}`);
 
     try {
+      // First, try to fetch from DocAI API
       const axios = require('axios');
       const { getDestination } = require('@sap-cloud-sdk/connectivity');
 
@@ -1027,6 +1021,7 @@ module.exports = cds.service.impl(async function() {
           headerFields: [],
           lineItems: [],
           fileData: fileData,
+          extractionSource: 'api',
           rawResults: JSON.stringify(documentData)
         };
       }
@@ -1104,19 +1099,97 @@ module.exports = cds.service.impl(async function() {
       // Convert line item groups to array and sort by occurrence
       const lineItems = Object.values(lineItemGroups).sort((a, b) => a.occurrence - b.occurrence);
 
-      console.log(`[INFO] getDocAIResults - Parsed ${headerFields.length} header fields and ${lineItems.length} line items`);
+      console.log(`[INFO] getDocAIResults - Parsed ${headerFields.length} header fields and ${lineItems.length} line items from API`);
+
+      // Store extraction data in DB for future use
+      let doc = null;
+      let finalExtractionSource = 'api';
+
+      try {
+        doc = await SELECT.one.from(Documents).where({ docaiDocumentId: documentId });
+        if (doc) {
+          // If callback data already exists, use it instead of overwriting with API data
+          if (doc.extractionSource === 'callback' && doc.extractionData) {
+            console.log('[INFO] getDocAIResults - Using callback data instead of API data');
+            const extractionData = JSON.parse(doc.extractionData);
+
+            return {
+              headerFields: extractionData.headerFields || [],
+              lineItems: extractionData.lineItems || [],
+              documentConfidence: extractionData.documentConfidence || 0,
+              fileData: fileData, // Still use file from API since callback doesn't include it
+              extractionSource: 'callback',
+              rawResults: JSON.stringify(extractionData.rawPayload || {})
+            };
+          }
+
+          // No callback data - store API data
+          const extractionData = {
+            headerFields: headerFields,
+            lineItems: lineItems,
+            documentConfidence: documentData.confidenceScore || 0,
+            schemaVersionId: documentData.schemaVersion?.ID,
+            clientId: documentData.schema?.clientId,
+            rawPayload: documentData
+          };
+
+          await UPDATE(Documents, doc.ID).set({
+            extractionData: JSON.stringify(extractionData),
+            schemaVersionId: documentData.schemaVersion?.ID,
+            clientId: documentData.schema?.clientId,
+            extractionSource: 'api'
+          });
+
+          finalExtractionSource = 'api';
+          console.log('[INFO] getDocAIResults - API extraction data cached in DB');
+        }
+      } catch (cacheError) {
+        console.error('[ERROR] getDocAIResults - Failed to cache extraction data:', cacheError.message);
+      }
 
       return {
         headerFields: headerFields,
         lineItems: lineItems,
         documentConfidence: documentData.confidenceScore || 0,
         fileData: fileData,
+        extractionSource: finalExtractionSource,
         rawResults: JSON.stringify(documentData)
       };
 
     } catch (error) {
-      console.error('[ERROR] getDocAIResults - DocAI v4 results fetch error:', error.response?.data || error.message);
-      req.error(500, `Results fetch failed: ${error.response?.data?.error?.message || error.message}`);
+      console.error('[ERROR] getDocAIResults - DocAI v4 API fetch failed:', error.response?.data || error.message);
+      console.log('[INFO] getDocAIResults - Falling back to local extraction data');
+
+      // Fallback: Try to retrieve from local database
+      try {
+        const doc = await SELECT.one.from(Documents).where({ docaiDocumentId: documentId });
+
+        if (!doc) {
+          console.error('[ERROR] getDocAIResults - Document not found in database');
+          req.error(404, 'Document not found and API unavailable');
+        }
+
+        if (!doc.extractionData) {
+          console.error('[ERROR] getDocAIResults - No local extraction data available');
+          req.error(404, 'No extraction data available (API unavailable and no callback data stored)');
+        }
+
+        console.log('[INFO] getDocAIResults - Found local extraction data');
+        const extractionData = JSON.parse(doc.extractionData);
+
+        return {
+          headerFields: extractionData.headerFields || [],
+          lineItems: extractionData.lineItems || [],
+          documentConfidence: extractionData.documentConfidence || 0,
+          fileData: null, // PDF not available from callback
+          extractionSource: doc.extractionSource || 'local',
+          rawResults: JSON.stringify(extractionData.rawPayload || {})
+        };
+
+      } catch (fallbackError) {
+        console.error('[ERROR] getDocAIResults - Fallback failed:', fallbackError.message);
+        req.error(500, `Both API and local fallback failed: ${error.message} | ${fallbackError.message}`);
+      }
     }
   });
 
@@ -1142,7 +1215,7 @@ module.exports = cds.service.impl(async function() {
 
       const axios = require('axios');
       const { getDestination } = require('@sap-cloud-sdk/connectivity');
-      const destConfig = await getDestination({ destinationName: process.env.DOCAI_DESTINATION || 'docai-destination' });
+      const destConfig = await getDestination({ destinationName: 'docai-destination' });
 
       const baseUrl = destConfig.url.replace(/\/$/, '');
       const authHeaders = destConfig.authTokens && destConfig.authTokens.length > 0
@@ -1237,13 +1310,13 @@ module.exports = cds.service.impl(async function() {
       }
 
       const batch = await SELECT.one.from(ProcessingBatches).where({ ID: doc.batch_ID });
-      const schemaId = batch?.schemaId || process.env.DOCAI_SCHEMA_VERSION_ID;
+      const schemaId = batch?.schemaId;
 
       console.log(`[DEBUG] processDocumentWithPolling - [${documentId}] schemaId: ${schemaId}`);
 
       if (!schemaId) {
         console.log(`[ERROR] processDocumentWithPolling - [${documentId}] No schema ID available`);
-        req.error(400, 'No schema ID available');
+        req.error(400, 'No schema ID available. Set schemaId in batch');
       }
 
       // Step 1: Submit to DocAI
@@ -1262,7 +1335,7 @@ module.exports = cds.service.impl(async function() {
       // Step 2: Poll for status
       const axios = require('axios');
       const { getDestination } = require('@sap-cloud-sdk/connectivity');
-      const destConfig = await getDestination({ destinationName: process.env.DOCAI_DESTINATION || 'docai-destination' });
+      const destConfig = await getDestination({ destinationName: 'docai-destination' });
 
       const baseUrl = destConfig.url.replace(/\/$/, '');
       const authHeaders = destConfig.authTokens && destConfig.authTokens.length > 0
@@ -1443,7 +1516,7 @@ module.exports = cds.service.impl(async function() {
       const axios = require('axios');
       const { getDestination } = require('@sap-cloud-sdk/connectivity');
 
-      const destinationName = process.env.DOCAI_DESTINATION || 'docai-destination';
+      const destinationName = 'docai-destination';
       const destConfig = await getDestination({ destinationName });
       const baseUrl = destConfig.url.replace(/\/$/, '');
 
@@ -1512,6 +1585,20 @@ module.exports = cds.service.impl(async function() {
       });
 
       console.log('[INFO] updateAndConfirmDocument - Document confirmed successfully');
+
+      // Step 3: Update document status in database
+      try {
+        const doc = await SELECT.one.from(Documents).where({ docaiDocumentId: documentId });
+        if (doc) {
+          await UPDATE(Documents, doc.ID).set({
+            status: 'confirmed',
+            extractionStatus: 'confirmed'
+          });
+          console.log('[INFO] updateAndConfirmDocument - Document status updated to confirmed in database');
+        }
+      } catch (dbError) {
+        console.error('[ERROR] updateAndConfirmDocument - Failed to update DB status:', dbError.message);
+      }
 
       return {
         success: true,
