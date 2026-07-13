@@ -945,8 +945,42 @@ module.exports = cds.service.impl(async function() {
       };
 
     } catch (error) {
-      console.error('[ERROR] getDocAIStatus - DocAI v4 status check error:', error.response?.data || error.message);
-      req.error(500, `Status check failed: ${error.response?.data?.error?.message || error.message}`);
+      console.error('[ERROR] getDocAIStatus - DocAI API unavailable:', error.response?.data || error.message);
+      console.log('[INFO] getDocAIStatus - Falling back to local database status');
+
+      // Fallback: Return status from local database
+      try {
+        const doc = await SELECT.one.from(Documents).where({ docaiDocumentId: documentId });
+
+        if (!doc) {
+          console.error('[ERROR] getDocAIStatus - Document not found in database');
+          req.error(404, 'Document not found');
+        }
+
+        // If we have extraction data from callback, return reviewNeeded status
+        const effectiveStatus = doc.extractionData ? 'reviewNeeded' : (doc.extractionStatus || doc.status || 'unknown');
+
+        console.log(`[INFO] getDocAIStatus - Local status: ${effectiveStatus}, source: ${doc.extractionSource || 'unknown'}`);
+
+        return {
+          status: effectiveStatus,
+          id: documentId,
+          createdAt: doc.createdAt,
+          finishedAt: doc.modifiedAt,
+          details: JSON.stringify({
+            ID: documentId,
+            status: effectiveStatus,
+            extractionSource: doc.extractionSource,
+            schemaVersionId: doc.schemaVersionId,
+            clientId: doc.clientId,
+            note: 'Status retrieved from local database (DocAI API unavailable)'
+          })
+        };
+
+      } catch (fallbackError) {
+        console.error('[ERROR] getDocAIStatus - Fallback failed:', fallbackError.message);
+        req.error(500, `Both API and local fallback failed: ${error.message} | ${fallbackError.message}`);
+      }
     }
   });
 
@@ -1606,8 +1640,80 @@ module.exports = cds.service.impl(async function() {
       };
 
     } catch (error) {
-      console.error('[ERROR] updateAndConfirmDocument - Update and confirm error:', error.response?.data || error.message);
-      req.error(500, `Failed to update and confirm: ${error.response?.data?.error?.message || error.message}`);
+      console.error('[ERROR] updateAndConfirmDocument - DocAI API unavailable:', error.response?.data || error.message);
+      console.log('[INFO] updateAndConfirmDocument - Falling back to local confirmation');
+
+      // Fallback: Update status locally when DocAI is unavailable
+      try {
+        const doc = await SELECT.one.from(Documents).where({ docaiDocumentId: documentId });
+
+        if (!doc) {
+          console.error('[ERROR] updateAndConfirmDocument - Document not found in database');
+          req.error(404, 'Document not found');
+        }
+
+        // Update local extraction data with edited values
+        if (doc.extractionData && entities && entities.length > 0) {
+          const extractionData = JSON.parse(doc.extractionData);
+
+          // Update header fields
+          entities.forEach(entity => {
+            const headerField = extractionData.headerFields?.find(f => f.ID === entity.entityId);
+            if (headerField) {
+              if (entity.stringValue !== null && entity.stringValue !== undefined) {
+                headerField.stringValue = entity.stringValue;
+              }
+              if (entity.numberValue !== null && entity.numberValue !== undefined) {
+                headerField.numberValue = entity.numberValue;
+              }
+              if (entity.dateValue !== null && entity.dateValue !== undefined) {
+                headerField.dateValue = entity.dateValue;
+              }
+              headerField.signedOff = true;
+            }
+
+            // Update line item fields
+            extractionData.lineItems?.forEach(lineItem => {
+              const lineField = lineItem.fields?.find(f => f.ID === entity.entityId);
+              if (lineField) {
+                if (entity.stringValue !== null && entity.stringValue !== undefined) {
+                  lineField.stringValue = entity.stringValue;
+                }
+                if (entity.numberValue !== null && entity.numberValue !== undefined) {
+                  lineField.numberValue = entity.numberValue;
+                }
+                if (entity.dateValue !== null && entity.dateValue !== undefined) {
+                  lineField.dateValue = entity.dateValue;
+                }
+                lineField.signedOff = true;
+              }
+            });
+          });
+
+          await UPDATE(Documents, doc.ID).set({
+            status: 'confirmed',
+            extractionStatus: 'confirmed',
+            extractionData: JSON.stringify(extractionData)
+          });
+
+          console.log('[INFO] updateAndConfirmDocument - Document confirmed locally (offline mode)');
+        } else {
+          await UPDATE(Documents, doc.ID).set({
+            status: 'confirmed',
+            extractionStatus: 'confirmed'
+          });
+          console.log('[INFO] updateAndConfirmDocument - Document status updated to confirmed locally');
+        }
+
+        return {
+          success: true,
+          message: 'Document confirmed locally (DocAI API unavailable - edits stored locally)'
+        };
+
+      } catch (fallbackError) {
+        console.error('[ERROR] updateAndConfirmDocument - Fallback failed:', fallbackError.message);
+        req.error(500, `Both API and local fallback failed: ${error.message} | ${fallbackError.message}`);
+      }
     }
   });
 

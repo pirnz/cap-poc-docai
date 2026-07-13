@@ -2,7 +2,7 @@ using { com.sap.docai as db } from '../db/schema';
 
 @requires: ['system-user', 'authenticated-user']
 @cds.server.body_parser.limit: '50mb'
-service InvoiceProcessingService @(path: '/invoice') {
+service DocumentProcessingService @(path: '/document') {
 
   entity ProcessingBatches as projection on db.ProcessingBatches;
   entity Documents as projection on db.Documents;

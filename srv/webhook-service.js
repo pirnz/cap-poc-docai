@@ -86,21 +86,104 @@ module.exports = cds.service.impl(async function() {
 
       console.log(`Found document: ${doc.ID}`);
 
-      // Get invoice service to store results
-      const invoiceService = await cds.connect.to('InvoiceProcessingService');
+      // Get document service to store results
+      const documentService = await cds.connect.to('DocumentProcessingService');
 
       // Store extraction results
-      await invoiceService.storeExtractionResults(doc.ID, invoice);
+      await documentService.storeExtractionResults(doc.ID, invoice);
 
-      // Update document status
+      // Parse entities from documentResult for structured storage
+      const allEntities = documentResult.documentVersions
+        ? documentResult.documentVersions.flatMap(v => v.entities || [])
+        : [];
+
+      // Build header fields and line items structure
+      const headerFields = [];
+      const lineItemGroups = {};
+
+      // Build entity map
+      const entityMap = {};
+      allEntities.forEach(entity => {
+        entityMap[entity.ID] = entity;
+      });
+
+      // Helper to check if entity's parent is a Table
+      function isTableField(entity) {
+        if (!entity.parent_ID) return false;
+        const parent = entityMap[entity.parent_ID];
+        return parent && parent.type === 'Table';
+      }
+
+      // Process entities
+      allEntities.forEach(entity => {
+        if (entity.type !== 'Field') return;
+
+        if (isTableField(entity)) {
+          // Line item field
+          const occurrence = entity.occurrence || 1;
+          if (!lineItemGroups[occurrence]) {
+            lineItemGroups[occurrence] = {
+              occurrence: occurrence,
+              fields: []
+            };
+          }
+          lineItemGroups[occurrence].fields.push({
+            ID: entity.ID,
+            name: entity.name,
+            label: entity.label,
+            dataType: entity.dataType,
+            stringValue: entity.stringValue,
+            numberValue: entity.numberValue,
+            dateValue: entity.dateValue,
+            rawValue: entity.rawValue,
+            confidence: entity.confidence,
+            signedOff: entity.signedOff
+          });
+        } else {
+          // Header field
+          headerFields.push({
+            ID: entity.ID,
+            name: entity.name,
+            label: entity.label,
+            dataType: entity.dataType,
+            stringValue: entity.stringValue,
+            numberValue: entity.numberValue,
+            dateValue: entity.dateValue,
+            rawValue: entity.rawValue,
+            confidence: entity.confidence,
+            signedOff: entity.signedOff,
+            parent_ID: entity.parent_ID
+          });
+        }
+      });
+
+      const lineItems = Object.values(lineItemGroups).sort((a, b) => a.occurrence - b.occurrence);
+
+      // Store structured extraction data for fallback
+      const extractionData = {
+        headerFields: headerFields,
+        lineItems: lineItems,
+        documentConfidence: quality.overallConfidence || 0,
+        schemaVersionId: documentResult.schemaVersion?.ID,
+        clientId: documentResult.schema?.clientId,
+        rawPayload: documentResult
+      };
+
+      // Update document status and store extraction data
       await UPDATE(Documents, doc.ID).set({
         status: 'extracted',
-        extractionStatus: notificationTargetStatus
+        extractionStatus: notificationTargetStatus,
+        extractionData: JSON.stringify(extractionData),
+        extractionSource: 'callback',
+        schemaVersionId: documentResult.schemaVersion?.ID,
+        clientId: documentResult.schema?.clientId
       });
+
+      console.log('[INFO] Webhook - Stored extraction data for offline access');
 
       // Trigger validation automatically
       try {
-        await invoiceService.send({
+        await documentService.send({
           event: 'validateDocument',
           data: { documentId: doc.ID }
         });

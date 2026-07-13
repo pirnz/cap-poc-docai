@@ -1,7 +1,7 @@
-using InvoiceProcessingService from '../srv/invoice-service';
+using DocumentProcessingService from '../srv/document-service';
 
 // Annotations for ProcessingBatches List Report
-annotate InvoiceProcessingService.ProcessingBatches with @(
+annotate DocumentProcessingService.ProcessingBatches with @(
   UI.SelectionFields: [
     fileName,
     fileType,
@@ -60,7 +60,7 @@ annotate InvoiceProcessingService.ProcessingBatches with @(
 };
 
 // Object Page for ProcessingBatches
-annotate InvoiceProcessingService.ProcessingBatches with @(
+annotate DocumentProcessingService.ProcessingBatches with @(
   UI.HeaderInfo: {
     TypeName: 'Processing Batch',
     TypeNamePlural: 'Processing Batches',
@@ -94,7 +94,7 @@ annotate InvoiceProcessingService.ProcessingBatches with @(
 );
 
 // Annotations for Documents
-annotate InvoiceProcessingService.Documents with @(
+annotate DocumentProcessingService.Documents with @(
   UI.SelectionFields: [
     fileName,
     status,
@@ -124,12 +124,12 @@ annotate InvoiceProcessingService.Documents with @(
     },
     {
       $Type: 'UI.DataFieldForAction',
-      Action: 'InvoiceProcessingService.processDocument',
+      Action: 'DocumentProcessingService.processDocument',
       Label: 'Process Document'
     },
     {
       $Type: 'UI.DataFieldForAction',
-      Action: 'InvoiceProcessingService.validateDocument',
+      Action: 'DocumentProcessingService.validateDocument',
       Label: 'Validate'
     }
   ]
@@ -143,7 +143,7 @@ annotate InvoiceProcessingService.Documents with @(
 };
 
 // Object Page for Documents
-annotate InvoiceProcessingService.Documents with @(
+annotate DocumentProcessingService.Documents with @(
   UI.HeaderInfo: {
     TypeName: 'Document',
     TypeNamePlural: 'Documents',
@@ -188,7 +188,7 @@ annotate InvoiceProcessingService.Documents with @(
 );
 
 // Annotations for InvoiceHeader
-annotate InvoiceProcessingService.InvoiceHeaders with @(
+annotate DocumentProcessingService.InvoiceHeaders with @(
   UI.FieldGroup#InvoiceHeader: {
     Data: [
       {
@@ -278,7 +278,7 @@ annotate InvoiceProcessingService.InvoiceHeaders with @(
 };
 
 // Annotations for InvoiceLineItems
-annotate InvoiceProcessingService.InvoiceLineItems with @(
+annotate DocumentProcessingService.InvoiceLineItems with @(
   UI.LineItem: [
     {
       $Type: 'UI.DataField',
@@ -327,7 +327,7 @@ annotate InvoiceProcessingService.InvoiceLineItems with @(
 };
 
 // Annotations for ValidationResults
-annotate InvoiceProcessingService.ValidationResults with @(
+annotate DocumentProcessingService.ValidationResults with @(
   UI.LineItem: [
     {
       $Type: 'UI.DataField',

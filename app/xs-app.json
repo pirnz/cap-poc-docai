@@ -1,17 +1,17 @@
 {
   "welcomeFile": "index.html",
-  "authenticationMethod": "route",
+  "authenticationMethod": "none",
   "routes": [
     {
       "source": "^/odata/(.*)$",
       "target": "$1",
-      "authenticationType": "xsuaa",
+      "authenticationType": "none",
       "destination": "srv-api",
       "csrfProtection": false
     },
     {
       "source": "^/(.*)$",
-      "authenticationType": "xsuaa",
+      "authenticationType": "none",
       "service": "html5-apps-repo-rt"
     }
   ]

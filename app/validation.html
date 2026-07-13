@@ -137,7 +137,7 @@
 
                 log("Checking status for: " + currentDocumentId, false);
 
-                fetch("./odata/invoice/getDocAIStatus", {
+                fetch("./odata/document/getDocAIStatus", {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json"
@@ -180,7 +180,7 @@
             function fetchSchemaFields(schemaVersionId) {
                 log("Fetching schema fields for version ID: " + schemaVersionId, false);
 
-                return fetch("./odata/invoice/getSchemaFields", {
+                return fetch("./odata/document/getSchemaFields", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -213,7 +213,7 @@
             function fetchDocumentEntities(documentId) {
                 log("Fetching document entities for ID: " + documentId, false);
 
-                return fetch("./odata/invoice/getDocAIResults", {
+                return fetch("./odata/document/getDocAIResults", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -479,7 +479,7 @@
                 var schemaPromise;
                 if (!currentSchemaVersionId) {
                     log("No schema version ID, fetching from DocAI...", false);
-                    schemaPromise = fetch("./odata/invoice/getDocAIStatus", {
+                    schemaPromise = fetch("./odata/document/getDocAIStatus", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ documentId: currentDocumentId })
@@ -523,8 +523,8 @@
 
                         // Update extraction source display
                         const sourceText = results.extractionSource === 'api' ? '📡 Data source: DocAI API' :
-                                         results.extractionSource === 'callback' ? '📨 Data source: Callback' :
-                                         results.extractionSource === 'local' ? '💾 Data source: Local (from callback)' :
+                                         results.extractionSource === 'callback' ? '📨 Data source: Callback (offline mode)' :
+                                         results.extractionSource === 'local' ? '💾 Data source: Local (from callback, offline mode)' :
                                          '';
                         oExtractionSourceText.setText(sourceText);
 
@@ -621,7 +621,7 @@
                 }
 
                 // Call the CAP action that updates and confirms
-                fetch("./odata/invoice/updateAndConfirmDocument", {
+                fetch("./odata/document/updateAndConfirmDocument", {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json"
