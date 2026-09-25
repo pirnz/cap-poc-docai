@@ -10,7 +10,7 @@ const { parseGroovyToJson } = require('./utils/groovy-parser');
 
 module.exports = cds.service.impl(async function() {
   const db = await cds.connect.to('db');
-  const { Documents, InvoiceHeader, InvoiceLineItems } = db.entities('com.sap.docai');
+  const { Documents } = db.entities('com.sap.docai');
 
   /**
    * DocAI Callback Handler
@@ -182,11 +182,56 @@ module.exports = cds.service.impl(async function() {
           return parent && parent.type === 'Table';
         }
 
+        // Fetch schema to get Group/Table labels
+        let schemaEntitiesMap = {};
+        if (schemaVersionId) {
+          try {
+            console.log('[INFO] Fetching schema entities to get Group/Table labels');
+            const destinationName = 'docai-destination';
+            const dest = await cds.connect.to(destinationName);
+            const baseUrl = dest.options.url || '';
+            const schemaUrl = `${baseUrl}/SchemaService/SchemaEntities?$filter=schemaVersion_ID eq ${schemaVersionId} and (type eq 'Group' or type eq 'Table')`;
+
+            const { executeHttpRequest } = require('./utils/http-utils');
+            const schemaResponse = await executeHttpRequest(
+              { destinationName },
+              { method: 'GET', url: schemaUrl }
+            );
+
+            const schemaEntities = schemaResponse.data.value || [];
+            console.log(`[INFO] Found ${schemaEntities.length} Groups/Tables in schema`);
+
+            // Build map by name for lookup
+            schemaEntities.forEach(entity => {
+              if (entity.name) {
+                schemaEntitiesMap[entity.name] = entity;
+              }
+            });
+          } catch (schemaError) {
+            console.error('[ERROR] Failed to fetch schema entities:', schemaError.message);
+            // Continue without schema labels
+          }
+        }
+
         // Separate header fields and line items
         const headerFields = [];
         const lineItemGroups = {}; // Group by occurrence for line items
+        const parentEntities = {}; // Store Groups and Tables metadata
 
-        // Process entities - only Fields (not Groups or Tables)
+        // First pass: collect Groups and Tables with labels from schema
+        entities.forEach(entity => {
+          if (entity.type === 'Group' || entity.type === 'Table') {
+            const schemaEntity = schemaEntitiesMap[entity.name];
+            parentEntities[entity.ID] = {
+              ID: entity.ID,
+              name: entity.name,
+              label: schemaEntity?.label || entity.label || entity.name,
+              type: entity.type
+            };
+          }
+        });
+
+        // Second pass: Process Fields
         entities.forEach(entity => {
           if (entity.type !== 'Field') return;
 
@@ -238,6 +283,7 @@ module.exports = cds.service.impl(async function() {
         const extractionData = {
           headerFields: headerFields,
           lineItems: lineItems,
+          parentEntities: parentEntities,
           documentConfidence: documentResult.confidenceScore || 0,
           schemaVersionId: schemaVersionId,
           clientId: clientId,
@@ -246,135 +292,8 @@ module.exports = cds.service.impl(async function() {
 
         statusUpdate.extractionData = JSON.stringify(extractionData);
         statusUpdate.extractionSource = 'callback';
-        console.log('[INFO] Extraction data stored from callback');
-
-        // Map common field names to invoice header structure
-        const fieldMapping = {
-          'invoiceNumber': 'invoiceNumber',
-          'documentNumber': 'invoiceNumber',
-          'supplier': 'supplier',
-          'senderName': 'supplier',
-          'supplierAddress': 'supplierAddress',
-          'senderAddress': 'supplierAddress',
-          'grossAmount': 'amount',
-          'amount': 'amount',
-          'totalAmount': 'amount',
-          'currency': 'currency',
-          'currencyCode': 'currency',
-          'invoiceDate': 'invoiceDate',
-          'documentDate': 'invoiceDate',
-          'poNumber': 'poNumber',
-          'purchaseOrderNumber': 'poNumber',
-          'dueDate': 'dueDate',
-          'paymentDueDate': 'dueDate',
-          'taxAmount': 'taxAmount',
-          'netAmount': 'netAmount'
-        };
-
-        // Build invoice header from extracted fields
-        const headerData = {
-          document_ID: document.ID
-        };
-
-        let totalConfidence = 0;
-        let fieldCount = 0;
-
-        headerFields.forEach(field => {
-          const targetField = fieldMapping[field.name];
-          if (targetField) {
-            // Set value based on data type
-            if (field.dataType === 'Number') {
-              headerData[targetField] = field.numberValue;
-            } else if (field.dataType === 'Date') {
-              headerData[targetField] = field.dateValue;
-            } else {
-              headerData[targetField] = field.stringValue;
-            }
-
-            // Set confidence
-            headerData[`${targetField}_confidence`] = field.confidence || 0;
-
-            if (field.confidence) {
-              totalConfidence += field.confidence;
-              fieldCount++;
-            }
-          }
-        });
-
-        // Calculate overall confidence
-        headerData.overallConfidence = fieldCount > 0 ? totalConfidence / fieldCount : 0;
-
-        // Check if header already exists and delete it before inserting
-        const existingHeader = await cds.run(
-          SELECT.one.from(InvoiceHeader).where({ document_ID: document.ID })
-        );
-        if (existingHeader) {
-          await cds.run(
-            DELETE.from(InvoiceHeader).where({ document_ID: document.ID })
-          );
-          console.log('🔄 Deleted existing invoice header');
-        }
-
-        // Store invoice header
-        await cds.run(INSERT.into(InvoiceHeader).entries(headerData));
-        console.log('✅ Invoice header stored successfully');
-
-        // Check if line items already exist and delete them before inserting
-        const existingLineItems = await cds.run(
-          SELECT.from(InvoiceLineItems).where({ document_ID: document.ID })
-        );
-        if (existingLineItems.length > 0) {
-          await cds.run(
-            DELETE.from(InvoiceLineItems).where({ document_ID: document.ID })
-          );
-          console.log(`🔄 Deleted ${existingLineItems.length} existing line items`);
-        }
-
-        // Store line items
-        if (lineItems.length > 0) {
-          const lineMapping = {
-            'description': 'description',
-            'quantity': 'quantity',
-            'unitPrice': 'unitPrice',
-            'netAmount': 'lineAmount',
-            'lineAmount': 'lineAmount',
-            'materialNumber': 'materialNumber',
-            'poLineItem': 'poLineItem',
-            'purchaseOrderItemNumber': 'poLineItem'
-          };
-
-          const lineItemsData = [];
-          lineItems.forEach((lineItem, index) => {
-            const itemData = {
-              document_ID: document.ID,
-              lineNumber: lineItem.occurrence || (index + 1)
-            };
-
-            lineItem.fields.forEach(field => {
-              const targetField = lineMapping[field.name];
-              if (targetField) {
-                // Set value based on data type
-                if (field.dataType === 'Number') {
-                  itemData[targetField] = field.numberValue;
-                } else if (field.dataType === 'Date') {
-                  itemData[targetField] = field.dateValue;
-                } else {
-                  itemData[targetField] = field.stringValue;
-                }
-
-                // Set confidence
-                itemData[`${targetField}_confidence`] = field.confidence || 0;
-              }
-            });
-
-            lineItemsData.push(itemData);
-          });
-
-          await cds.run(INSERT.into(InvoiceLineItems).entries(lineItemsData));
-          console.log(`✅ ${lineItems.length} invoice line items stored successfully`);
-        } else {
-          console.log('⚠️  No line items found in extraction');
-        }
+        console.log('[INFO] Schema-agnostic extraction data stored from callback');
+        console.log(`[INFO] Stored ${headerFields.length} header fields and ${lineItems.length} line items`)
 
         // Set status to 'extracted' when data is available
         statusUpdate.status = 'extracted';

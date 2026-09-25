@@ -7,7 +7,7 @@
     <title>Document Monitoring</title>
     <script
         id="sap-ui-bootstrap"
-        src="https://ui5.sap.com/1.120.0/resources/sap-ui-core.js"
+        src="https://ui5.sap.com/1.148.10/resources/sap-ui-core.js"
         data-sap-ui-theme="sap_horizon"
         data-sap-ui-libs="sap.m,sap.ui.core"
         data-sap-ui-async="true"
@@ -29,12 +29,25 @@
             "sap/ui/model/json/JSONModel",
             "sap/m/Table",
             "sap/m/Column",
-            "sap/m/ColumnListItem"
-        ], function (App, Page, VBox, HBox, Title, Text, Button, MessageToast, Label, ObjectStatus, JSONModel, Table, Column, ColumnListItem) {
+            "sap/m/ColumnListItem",
+            "sap/m/Link",
+            "sap/m/BusyDialog"
+        ], function (App, Page, VBox, HBox, Title, Text, Button, MessageToast, Label, ObjectStatus, JSONModel, Table, Column, ColumnListItem, Link, BusyDialog) {
+
+            // Helper function: Get API base path based on hostname
+            function getApiBasePath() {
+                var isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+                return isLocalhost ? './' : './odata/';
+            }
 
             // JSON model for documents
             var oDocumentsModel = new JSONModel({
                 documents: []
+            });
+
+            // Loading dialog
+            var oBusyDialog = new BusyDialog({
+                text: "Loading documents..."
             });
 
             // Helper function: Generate UUID
@@ -48,7 +61,9 @@
 
             // Load all documents from database
             function loadAllDocuments() {
-                fetch("./odata/document/Documents", {
+                oBusyDialog.open();
+
+                fetch(getApiBasePath() + "document/Documents", {
                     method: "GET",
                     headers: {
                         "Content-Type": "application/json"
@@ -63,7 +78,7 @@
                     dbDocuments.forEach(function(dbDoc) {
                         var newDoc = {
                             id: generateUUID(),
-                            fileName: dbDoc.fileName || "Unknown",
+                            fileName: parseFileName(dbDoc.fileName, dbDoc.extractionSource),
                             documentId: dbDoc.docaiDocumentId,
                             schemaVersionId: dbDoc.schemaVersionId,
                             clientId: dbDoc.clientId,
@@ -76,13 +91,41 @@
                         uiDocuments.push(newDoc);
                     });
 
+                    // Sort by uploadedAt descending (most recent first)
+                    uiDocuments.sort(function(a, b) {
+                        var dateA = a.uploadedAt ? new Date(a.uploadedAt) : new Date(0);
+                        var dateB = b.uploadedAt ? new Date(b.uploadedAt) : new Date(0);
+                        return dateB - dateA;
+                    });
+
                     oDocumentsModel.setProperty("/documents", uiDocuments);
                     MessageToast.show("Loaded " + dbDocuments.length + " documents from database");
+                    oBusyDialog.close();
                 })
                 .catch(error => {
                     MessageToast.show("Failed to load documents: " + error.message);
                     console.error("Failed to load documents:", error);
+                    oBusyDialog.close();
                 });
+            }
+
+            // Parse filename from callback documents
+            function parseFileName(fileName, source) {
+                if (!fileName) return "Unknown";
+
+                // For callback documents, try to extract actual filename from pattern
+                if (source === 'callback') {
+                    // Pattern: callback_<timestamp>_<filename> or just the JSON payload name
+                    // Extract anything after last underscore or slash
+                    var match = fileName.match(/callback[_-].*?[_-](.+)$/i);
+                    if (match) return match[1];
+
+                    // Try to extract from path
+                    var pathMatch = fileName.match(/[\/\\]([^\/\\]+)$/);
+                    if (pathMatch) return pathMatch[1];
+                }
+
+                return fileName;
             }
 
             // Get extraction source display text with indicator
@@ -93,18 +136,43 @@
                 return source || '-';
             }
 
+            // Get merged DocAI status (prioritize extractionStatus over status)
+            function getDocAIStatus(doc) {
+                var status = doc.extractionStatus || doc.status || 'unknown';
+
+                // Normalize status labels
+                if (status === 'SUCCEEDED' || status === 'DONE') return 'Confirmed';
+                if (status === 'reviewNeeded') return 'Review Needed';
+                if (status === 'confirmed') return 'Confirmed';
+                if (status === 'FAILED' || status === 'failed') return 'Failed';
+                if (status === 'ERROR') return 'Error';
+                if (status === 'pending' || status === 'IN_PROGRESS') return 'In Process';
+                if (status === 'uploading') return 'Uploading';
+
+                return status;
+            }
+
             // Get status display state
             function getStatusState(status) {
-                if (status === "confirmed" || status === "reviewNeeded" || status === "DONE" || status === "SUCCEEDED") {
+                if (status === "Confirmed" || status === "confirmed" || status === "DONE" || status === "SUCCEEDED") {
                     return "Success";
                 }
-                if (status === "failed" || status === "ERROR" || status === "FAILED") {
+                if (status === "Review Needed" || status === "reviewNeeded") {
+                    return "Warning";
+                }
+                if (status === "Failed" || status === "failed" || status === "ERROR" || status === "FAILED") {
                     return "Error";
                 }
-                if (status === "pending" || status === "uploading") {
-                    return "None";
+                if (status === "In Process" || status === "pending" || status === "uploading" || status === "IN_PROGRESS") {
+                    return "Information";
                 }
-                return "Information";
+                return "None";
+            }
+
+            // Format Document ID as DocAI link
+            function getDocAILink(documentId) {
+                if (!documentId) return null;
+                return "https://docai-workshop.eu10.doc.cloud.sap/workspace#/Documents(" + documentId + ")";
             }
 
             // Documents table
@@ -114,14 +182,14 @@
                 columns: [
                     new Column({
                         header: new Label({ text: "File Name" }),
-                        width: "25%"
+                        width: "20%"
                     }),
                     new Column({
-                        header: new Label({ text: "Status" }),
-                        width: "15%"
+                        header: new Label({ text: "Document ID" }),
+                        width: "20%"
                     }),
                     new Column({
-                        header: new Label({ text: "Extraction Status" }),
+                        header: new Label({ text: "DocAI Status" }),
                         width: "15%"
                     }),
                     new Column({
@@ -153,14 +221,47 @@
                         },
                         cells: [
                             new Text({ text: "{documents>fileName}" }),
-                            new ObjectStatus({
-                                text: "{documents>status}",
-                                state: {
-                                    path: "documents>status",
-                                    formatter: getStatusState
+                            new Link({
+                                text: "{documents>documentId}",
+                                href: {
+                                    path: "documents>documentId",
+                                    formatter: getDocAILink
+                                },
+                                target: "_blank",
+                                visible: {
+                                    path: "documents>documentId",
+                                    formatter: function(docId) {
+                                        return !!docId;
+                                    }
                                 }
                             }),
-                            new Text({ text: "{documents>extractionStatus}" }),
+                            new ObjectStatus({
+                                text: {
+                                    parts: [
+                                        { path: "documents>extractionStatus" },
+                                        { path: "documents>status" }
+                                    ],
+                                    formatter: function(extractionStatus, status) {
+                                        return getDocAIStatus({
+                                            extractionStatus: extractionStatus,
+                                            status: status
+                                        });
+                                    }
+                                },
+                                state: {
+                                    parts: [
+                                        { path: "documents>extractionStatus" },
+                                        { path: "documents>status" }
+                                    ],
+                                    formatter: function(extractionStatus, status) {
+                                        var docStatus = getDocAIStatus({
+                                            extractionStatus: extractionStatus,
+                                            status: status
+                                        });
+                                        return getStatusState(docStatus);
+                                    }
+                                }
+                            }),
                             new Text({
                                 text: {
                                     path: "documents>extractionSource",
@@ -292,6 +393,9 @@
 
             // Auto-load documents on init
             loadAllDocuments();
+        }, function(err) {
+            console.error("UI5 module loading failed:", err);
+            document.body.innerHTML = '<div style="padding:20px;color:red;">Error loading UI5 framework. Please check console and refresh.</div>';
         });
     </script>
 </head>

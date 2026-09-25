@@ -7,7 +7,7 @@
     <title>DocAI Workbench</title>
     <script
         id="sap-ui-bootstrap"
-        src="https://ui5.sap.com/1.120.0/resources/sap-ui-core.js"
+        src="https://ui5.sap.com/1.148.10/resources/sap-ui-core.js"
         data-sap-ui-theme="sap_horizon"
         data-sap-ui-libs="sap.m,sap.ui.core"
         data-sap-ui-async="true"
@@ -31,6 +31,13 @@
             "sap/m/MessageToast",
             "sap/m/FlexItemData"
         ], function (App, Page, VBox, HBox, Title, Text, Link, GenericTile, TileContent, ImageContent, Icon, Panel, MessageToast, FlexItemData) {
+
+            // Check if all modules loaded
+            if (!App || !Page || !VBox || !HBox) {
+                console.error("Failed to load required UI5 modules");
+                document.body.innerHTML = '<div style="padding:20px;color:red;">Error: Failed to load UI5 libraries. Please refresh the page.</div>';
+                return;
+            }
 
             // Navigation function
             function navigateTo(path) {
@@ -103,17 +110,16 @@
                                 })
                             ]
                         }).addStyleClass("sapUiTinyMarginTop"),
-
-                        new Title({
-                            text: "Available Entities",
-                            level: "H4"
-                        }).addStyleClass("sapUiSmallMarginTop"),
-                        new VBox({
+                        new HBox({
                             items: [
-                                new Text({ text: "• ProcessingBatches" }),
-                                new Text({ text: "• Documents" }),
-                                new Text({ text: "• InvoiceHeaders" }),
-                                new Text({ text: "• InvoiceLineItems" })
+                                new Text({
+                                    text: "Enriching Endpoint:",
+                                    width: "150px"
+                                }).addStyleClass("sapUiSmallMarginEnd"),
+                                new Text({
+                                    text: "/odata/v4/callback-enrich",
+                                    wrapping: true
+                                })
                             ]
                         }).addStyleClass("sapUiTinyMarginTop"),
 
@@ -138,23 +144,6 @@
                                 new Text({ text: "• createBatch - Create processing batch" }),
                                 new Text({ text: "• processBatch - Process batch documents" }),
                                 new Text({ text: "• pollBatchStatus - Monitor batch processing" })
-                            ]
-                        }).addStyleClass("sapUiTinyMarginTop"),
-
-                        new Title({
-                            text: "Features",
-                            level: "H4"
-                        }).addStyleClass("sapUiSmallMarginTop"),
-                        new VBox({
-                            items: [
-                                new Text({ text: "✓ Schema-agnostic extraction" }),
-                                new Text({ text: "✓ Hybrid mode (API + callback)" }),
-                                new Text({ text: "✓ Multi-document batch processing" }),
-                                new Text({ text: "✓ Real-time polling and webhooks" }),
-                                new Text({ text: "✓ S/4HANA integration" }),
-                                new Text({ text: "✓ Entity confidence scores" }),
-                                new Text({ text: "✓ Line item extraction" }),
-                                new Text({ text: "✓ Editable extraction results" })
                             ]
                         }).addStyleClass("sapUiTinyMarginTop")
                     ]
@@ -254,6 +243,9 @@
             });
 
             oApp.placeAt("content");
+        }, function(err) {
+            console.error("UI5 module loading failed:", err);
+            document.body.innerHTML = '<div style="padding:20px;color:red;">Error loading UI5 framework. Please check console and refresh.</div>';
         });
     </script>
 </head>

@@ -195,13 +195,35 @@ function parseGroovyToJson(str) {
 
   function parsePrimitive() {
     let value = '';
+    let bracketDepth = 0; // Track nested brackets in unquoted strings
 
     // Read until we find a definitive delimiter
     while (pos < length) {
       const char = str[pos];
 
-      // Check if this is a structural end character
-      if (char === '}' || char === ']') {
+      // Track bracket depth - brackets can be part of unquoted string values
+      if (char === '[') {
+        bracketDepth++;
+        value += char;
+        pos++;
+        continue;
+      }
+
+      if (char === ']') {
+        if (bracketDepth > 0) {
+          // This is a closing bracket within the value
+          bracketDepth--;
+          value += char;
+          pos++;
+          continue;
+        } else {
+          // This is a structural end character
+          break;
+        }
+      }
+
+      // Check if this is a structural end character (only when not inside brackets)
+      if (bracketDepth === 0 && char === '}') {
         break;
       }
 
@@ -219,8 +241,8 @@ function parseGroovyToJson(str) {
         if (lookAhead < length) {
           const nextChar = str[lookAhead];
 
-          // If it's a structural character, comma is a separator
-          if (nextChar === '}' || nextChar === ']') {
+          // If it's a structural character, comma is a separator (only if not in brackets)
+          if (bracketDepth === 0 && (nextChar === '}' || nextChar === ']')) {
             break;
           }
 
@@ -240,8 +262,8 @@ function parseGroovyToJson(str) {
               keyCheck++;
             }
 
-            // If followed by '=', this comma is a separator
-            if (keyCheck < length && str[keyCheck] === '=') {
+            // If followed by '=', this comma is a separator (only if not in brackets)
+            if (bracketDepth === 0 && keyCheck < length && str[keyCheck] === '=') {
               break;
             }
           }

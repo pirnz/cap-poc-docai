@@ -6,8 +6,6 @@ service DocumentProcessingService @(path: '/document') {
 
   entity ProcessingBatches as projection on db.ProcessingBatches;
   entity Documents as projection on db.Documents;
-  entity InvoiceHeaders as projection on db.InvoiceHeader;
-  entity InvoiceLineItems as projection on db.InvoiceLineItems;
   entity ValidationResults as projection on db.ValidationResults;
 
   action uploadFile(

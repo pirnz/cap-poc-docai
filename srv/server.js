@@ -70,6 +70,37 @@ cds.on('bootstrap', (app) => {
   });
 
   /**
+   * HEAD ENDPOINT: CSRF Token Request for Callback Enrich
+   *
+   * Provides CSRF tokens to clients before they can POST to callback-enrich endpoint.
+   */
+  app.head('/odata/v4/callback-enrich/callbackEnrich', csrfProtection, (req, res) => {
+    res.set({
+      'X-CSRF-Token': req.csrfToken(),
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate'
+    }).send();
+  });
+
+  /**
+   * POST ENDPOINT: DocAI Callback Enrich Handler
+   *
+   * Receives extraction results from SAP Document Information Extraction service
+   * for enrichment processing (adds supplier IDs and auto-confirms documents).
+   *
+   * Middleware chain:
+   * 1. parseForm - Parses URL-encoded data (fallback format)
+   * 2. csrfProtection - Validates CSRF token from HEAD request
+   * 3. next() - Forwards to CDS service handler (callback-enrich-service.js)
+   *
+   * Note: parseJson is already applied globally above
+   */
+  app.post('/odata/v4/callback-enrich/callbackEnrich', parseForm, csrfProtection, (req, res, next) => {
+    // Payload is now parsed and available in req.body
+    // Forward to CDS service handler for processing
+    next();
+  });
+
+  /**
    * ERROR HANDLER: CSRF Token Validation Failures
    *
    * Catches CSRF validation errors and returns a 403 Forbidden response.

@@ -23,55 +23,11 @@ entity Documents : cuid, managed {
   docaiDocumentId: String(255);
   extractionStatus: String(50);
   extractionError: String(5000);
-  extractionData: LargeString; // Schema-agnostic JSON extraction from callback
+  extractionData: LargeString; // Schema-agnostic JSON extraction (all fields, groups, tables)
   extractionSource: String(20); // 'callback' or 'api'
   schemaVersionId: String(255); // Schema version ID from DocAI
   clientId: String(255); // Client ID from DocAI
-  header: Composition of one InvoiceHeader on header.document = $self;
-  lineItems: Composition of many InvoiceLineItems on lineItems.document = $self;
   validationResults: Composition of many ValidationResults on validationResults.document = $self;
-}
-
-entity InvoiceHeader : cuid {
-  document: Association to Documents;
-  invoiceNumber: String(50);
-  invoiceNumber_confidence: Decimal(5,4);
-  supplier: String(255);
-  supplier_confidence: Decimal(5,4);
-  supplierAddress: String(5000);
-  supplierAddress_confidence: Decimal(5,4);
-  amount: Decimal(15,2);
-  amount_confidence: Decimal(5,4);
-  currency: String(3);
-  currency_confidence: Decimal(5,4);
-  invoiceDate: Date;
-  invoiceDate_confidence: Decimal(5,4);
-  poNumber: String(50);
-  poNumber_confidence: Decimal(5,4);
-  dueDate: Date;
-  dueDate_confidence: Decimal(5,4);
-  taxAmount: Decimal(15,2);
-  taxAmount_confidence: Decimal(5,4);
-  netAmount: Decimal(15,2);
-  netAmount_confidence: Decimal(5,4);
-  overallConfidence: Decimal(5,4);
-}
-
-entity InvoiceLineItems : cuid {
-  document: Association to Documents;
-  lineNumber: Integer;
-  description: String(5000);
-  description_confidence: Decimal(5,4);
-  quantity: Decimal(15,3);
-  quantity_confidence: Decimal(5,4);
-  unitPrice: Decimal(15,2);
-  unitPrice_confidence: Decimal(5,4);
-  lineAmount: Decimal(15,2);
-  lineAmount_confidence: Decimal(5,4);
-  poLineItem: String(10);
-  poLineItem_confidence: Decimal(5,4);
-  materialNumber: String(50);
-  materialNumber_confidence: Decimal(5,4);
 }
 
 entity ValidationResults : cuid {

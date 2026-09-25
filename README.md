@@ -312,6 +312,8 @@ mbt build
 
 2. **Deploy**:
 ```bash
+cf api https://api.cf.eu10-005.hana.ondemand.com
+cf l --sso -o docai-workshop
 cf deploy mta_archives/cap-poc-docai_1.0.0.mtar
 ```
 

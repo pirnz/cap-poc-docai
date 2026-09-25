@@ -1,5 +1,4 @@
 const cds = require('@sap/cds');
-const { parseDocumentResult } = require('./utils/docai-parser');
 const { normalizePayload, validatePayload } = require('./utils/payload-normalizer');
 const { simpleParser } = require('mailparser');
 const AdmZip = require('adm-zip');
@@ -7,7 +6,7 @@ const FormData = require('form-data');
 const { executeHttpRequest } = require('@sap-cloud-sdk/http-client');
 
 module.exports = cds.service.impl(async function() {
-  const { ProcessingBatches, Documents, InvoiceHeader, InvoiceLineItems, ValidationResults } = this.entities;
+  const { ProcessingBatches, Documents, ValidationResults } = this.entities;
 
   /**
    * Calculate criticality for UI
@@ -64,24 +63,6 @@ module.exports = cds.service.impl(async function() {
     docsArray.forEach(doc => {
       if (doc) {
         doc.statusCriticality = calculateStatusCriticality(doc.status);
-      }
-    });
-  });
-
-  /**
-   * After READ handler - add criticality to InvoiceHeaders
-   */
-  this.after('READ', 'InvoiceHeaders', (headers) => {
-    console.log(`[DEBUG] after READ InvoiceHeaders - count: ${Array.isArray(headers) ? headers.length : 1}`);
-    const headersArray = Array.isArray(headers) ? headers : [headers];
-    headersArray.forEach(header => {
-      if (header) {
-        header.invoiceNumber_criticality = calculateCriticality(header.invoiceNumber_confidence || 0);
-        header.supplier_criticality = calculateCriticality(header.supplier_confidence || 0);
-        header.amount_criticality = calculateCriticality(header.amount_confidence || 0);
-        header.invoiceDate_criticality = calculateCriticality(header.invoiceDate_confidence || 0);
-        header.poNumber_criticality = calculateCriticality(header.poNumber_confidence || 0);
-        header.overallConfidence_criticality = calculateCriticality(header.overallConfidence || 0);
       }
     });
   });
@@ -235,11 +216,13 @@ module.exports = cds.service.impl(async function() {
 
       console.log(`[INFO] processDocument - Submitting to DocAI`);
       // Submit to DocAI with schema from batch
-      const docaiDocumentId = await submitToDocAI(doc.fileContent, doc.fileName, schemaId);
+      const { documentId: docaiDocumentId, clientId: docaiClientId } = await submitToDocAI(doc.fileContent, doc.fileName, schemaId);
 
-      // Store DocAI document ID
+      // Store DocAI document ID and clientId
       await UPDATE(Documents, documentId).set({
         docaiDocumentId,
+        clientId: docaiClientId,
+        schemaVersionId: schemaId,
         extractionStatus: 'PENDING'
       });
 
@@ -338,6 +321,9 @@ module.exports = cds.service.impl(async function() {
   /**
    * Validate document - check mandatory fields
    */
+  /**
+   * Validate document - Schema-agnostic validation based on extractionData
+   */
   this.on('validateDocument', async (req) => {
     const { documentId } = req.data;
 
@@ -350,89 +336,64 @@ module.exports = cds.service.impl(async function() {
       req.error(404, 'Document not found');
     }
 
-    // Retrieve header
-    const header = await SELECT.one.from(InvoiceHeader).where({ document_ID: documentId });
-
-    if (!header) {
+    if (!doc.extractionData) {
       console.log(`[ERROR] validateDocument - No extraction data found for document: ${documentId}`);
       req.error(400, 'No extraction data found for document');
     }
 
-    const mandatoryFields = [
-      { name: 'invoiceNumber', label: 'Invoice Number' },
-      { name: 'supplier', label: 'Supplier' },
-      { name: 'amount', label: 'Amount' },
-      { name: 'invoiceDate', label: 'Invoice Date' },
-      { name: 'poNumber', label: 'PO Number' }
-    ];
+    // Parse schema-agnostic extraction data
+    const extractionData = JSON.parse(doc.extractionData);
+    const headerFields = extractionData.headerFields || [];
+    const lineItems = extractionData.lineItems || [];
 
+    console.log(`[INFO] validateDocument - Found ${headerFields.length} header fields and ${lineItems.length} line items`);
+
+    // Simple validation: check confidence thresholds
     const validationResults = [];
-    const missingFields = [];
+    const lowConfidenceFields = [];
+    const MIN_CONFIDENCE = 0.7;
 
-    for (const field of mandatoryFields) {
-      const value = header[field.name];
-      const confidence = header[`${field.name}_confidence`] || 0;
+    headerFields.forEach(field => {
+      const confidence = field.confidence || 0;
+      const isValid = confidence >= MIN_CONFIDENCE;
 
-      console.log(`[DEBUG] validateDocument - Field: ${field.name}, value: ${value}, confidence: ${confidence}`);
-
-      let isValid = true;
-      let errorMessage = null;
-
-      if (value === null || value === undefined || value === '') {
-        isValid = false;
-        errorMessage = `${field.label} is missing`;
-        missingFields.push(field.label);
-        console.log(`[WARNING] validateDocument - ${errorMessage}`);
-      }
-
-      // Additional validation rules
-      if (field.name === 'amount' && value !== null && value <= 0) {
-        isValid = false;
-        errorMessage = 'Amount must be positive';
-        console.log(`[WARNING] validateDocument - ${errorMessage}`);
-      }
-
-      if (field.name === 'invoiceDate' && value !== null) {
-        const invoiceDate = new Date(value);
-        const today = new Date();
-        if (invoiceDate > today) {
-          isValid = false;
-          errorMessage = 'Invoice date cannot be in the future';
-          console.log(`[WARNING] validateDocument - ${errorMessage}`);
-        }
+      if (!isValid) {
+        lowConfidenceFields.push(field.label || field.name);
       }
 
       validationResults.push({
         document_ID: documentId,
         fieldName: field.name,
         isValid,
-        isMandatory: true,
-        value: value ? String(value) : null,
+        isMandatory: false,
+        value: field.stringValue || field.numberValue || field.dateValue || null,
         confidence,
-        errorMessage,
+        errorMessage: isValid ? null : `Low confidence (${Math.round(confidence * 100)}%)`,
         validatedAt: new Date().toISOString()
       });
-    }
+    });
 
     // Store validation results
     await DELETE.from(ValidationResults).where({ document_ID: documentId });
-    await INSERT.into(ValidationResults).entries(validationResults);
+    if (validationResults.length > 0) {
+      await INSERT.into(ValidationResults).entries(validationResults);
+    }
 
-    const isValid = missingFields.length === 0 && validationResults.every(v => v.isValid);
+    const isValid = lowConfidenceFields.length === 0;
 
     // Update document status
     await UPDATE(Documents, documentId).set({
-      status: isValid ? 'validated' : 'failed'
+      status: isValid ? 'validated' : 'extracted'
     });
 
-    console.log(`[INFO] validateDocument - Document ${documentId} validation: ${isValid ? 'passed' : 'failed'}, missing fields: ${missingFields.length}`);
+    console.log(`[INFO] validateDocument - Document ${documentId} validation: ${isValid ? 'passed' : 'needs review'}, low confidence fields: ${lowConfidenceFields.length}`);
 
     return {
       isValid,
-      missingFields,
+      lowConfidenceFields,
       validationDetails: validationResults.map(v => ({
         field: v.fieldName,
-        status: v.isValid ? 'valid' : 'invalid',
+        status: v.isValid ? 'valid' : 'needs review',
         confidence: v.confidence
       }))
     };
@@ -672,49 +633,14 @@ module.exports = cds.service.impl(async function() {
         throw new Error('No documentId returned from schema execution');
       }
 
-      console.log(`[INFO] submitToDocAI - Success, documentId: ${documentId}`);
-      return documentId;
+      console.log(`[INFO] submitToDocAI - Success, documentId: ${documentId}, clientId: ${schemaClientId}`);
+      return { documentId, clientId: schemaClientId };
 
     } catch (error) {
       console.error('[ERROR] submitToDocAI - DocAI submission error:', error.response?.data || error.message);
       throw new Error(`DocAI submission failed: ${error.response?.data?.error?.message || error.message}`);
     }
   }
-
-  /**
-   * Store extraction results
-   */
-  async function storeExtractionResults(documentId, invoice) {
-    console.log(`[INFO] storeExtractionResults - documentId: ${documentId}`);
-    if (!invoice || !invoice.header) {
-      console.log(`[ERROR] storeExtractionResults - Invalid invoice data`);
-      throw new Error('Invalid invoice data');
-    }
-
-    // Store header
-    console.log(`[DEBUG] storeExtractionResults - Storing header data`);
-    await DELETE.from(InvoiceHeader).where({ document_ID: documentId });
-    await INSERT.into(InvoiceHeader).entries({
-      document_ID: documentId,
-      ...invoice.header
-    });
-
-    // Store line items
-    if (invoice.lineItems && invoice.lineItems.length > 0) {
-      console.log(`[DEBUG] storeExtractionResults - Storing ${invoice.lineItems.length} line items`);
-      await DELETE.from(InvoiceLineItems).where({ document_ID: documentId });
-      const lineItemsWithDocId = invoice.lineItems.map(item => ({
-        document_ID: documentId,
-        ...item
-      }));
-      await INSERT.into(InvoiceLineItems).entries(lineItemsWithDocId);
-    }
-
-    console.log(`[INFO] storeExtractionResults - Stored extraction results for document ${documentId}`);
-  }
-
-  // Make storeExtractionResults available to webhook service
-  this.storeExtractionResults = storeExtractionResults;
 
   /**
    * DocAI v4 API Test Actions
@@ -1019,11 +945,25 @@ module.exports = cds.service.impl(async function() {
       console.log('[DEBUG] getDocAIResults - Document data keys:', Object.keys(documentData));
       console.log('[DEBUG] getDocAIResults - Document file_ID:', documentData.file_ID);
 
-      // Get file data separately using file_ID - need to fetch the actual content stream
+      // Get file data and metadata separately using file_ID
       let fileData = null;
+      let fileName = null;
+      let mimeType = null;
       if (documentData.file_ID) {
         try {
-          // Fetch the file content using the $value endpoint for media streams
+          // First fetch file metadata
+          const fileMetadataUrl = `${baseUrl}/FileService/Files(${documentData.file_ID})`;
+          console.log('[DEBUG] getDocAIResults - Fetching file metadata from:', fileMetadataUrl);
+
+          const metadataResponse = await axios.get(fileMetadataUrl, {
+            headers: authHeaders
+          });
+
+          fileName = metadataResponse.data.name;
+          mimeType = metadataResponse.data.mimeType;
+          console.log('[INFO] getDocAIResults - File metadata retrieved:', { fileName, mimeType });
+
+          // Then fetch the file content using the $value endpoint for media streams
           const fileUrl = `${baseUrl}/FileService/Files(${documentData.file_ID})/content`;
           console.log('[DEBUG] getDocAIResults - Fetching file content from:', fileUrl);
 
@@ -1038,7 +978,7 @@ module.exports = cds.service.impl(async function() {
           // Convert arraybuffer to base64
           if (fileResponse.data) {
             fileData = Buffer.from(fileResponse.data).toString('base64');
-            console.log('[INFO] getDocAIResults - PDF file data retrieved, base64 length:', fileData.length);
+            console.log('[INFO] getDocAIResults - File data retrieved, base64 length:', fileData.length);
           }
         } catch (fileError) {
           console.error('[ERROR] getDocAIResults - Failed to fetch file:', fileError.response?.data || fileError.message);
@@ -1055,6 +995,8 @@ module.exports = cds.service.impl(async function() {
           headerFields: [],
           lineItems: [],
           fileData: fileData,
+          fileName: fileName,
+          mimeType: mimeType,
           extractionSource: 'api',
           rawResults: JSON.stringify(documentData)
         };
@@ -1073,6 +1015,7 @@ module.exports = cds.service.impl(async function() {
       // Separate header fields and line items
       const headerFields = [];
       const lineItemGroups = {}; // Group by occurrence for line items
+      const parentEntities = {}; // Store Groups and Tables metadata
 
       // Build parent lookup map
       const entityMap = {};
@@ -1087,7 +1030,43 @@ module.exports = cds.service.impl(async function() {
         return parent && parent.type === 'Table';
       }
 
-      // Process entities - only Fields (not Groups or Tables)
+      // Fetch schema to get Group/Table labels
+      const schemaVersionId = documentData.schemaVersion?.ID;
+      let schemaEntitiesMap = {};
+      if (schemaVersionId) {
+        try {
+          console.log('[INFO] getDocAIResults - Fetching schema entities to get Group/Table labels');
+          const schemaUrl = `${baseUrl}/SchemaService/SchemaEntities?$filter=schemaVersion_ID eq ${schemaVersionId} and (type eq 'Group' or type eq 'Table')`;
+          const schemaResponse = await axios.get(schemaUrl, { headers: authHeaders });
+          const schemaEntities = schemaResponse.data.value || [];
+          console.log(`[INFO] getDocAIResults - Found ${schemaEntities.length} Groups/Tables in schema`);
+
+          // Build map by name for lookup
+          schemaEntities.forEach(entity => {
+            if (entity.name) {
+              schemaEntitiesMap[entity.name] = entity;
+            }
+          });
+        } catch (schemaError) {
+          console.error('[ERROR] getDocAIResults - Failed to fetch schema entities:', schemaError.message);
+          // Continue without schema labels
+        }
+      }
+
+      // First pass: collect Groups and Tables with labels from schema
+      entities.forEach(entity => {
+        if (entity.type === 'Group' || entity.type === 'Table') {
+          const schemaEntity = schemaEntitiesMap[entity.name];
+          parentEntities[entity.ID] = {
+            ID: entity.ID,
+            name: entity.name,
+            label: schemaEntity?.label || entity.label || entity.name,
+            type: entity.type
+          };
+        }
+      });
+
+      // Second pass: Process Fields
       entities.forEach(entity => {
         if (entity.type !== 'Field') return;
 
@@ -1150,8 +1129,11 @@ module.exports = cds.service.impl(async function() {
             return {
               headerFields: extractionData.headerFields || [],
               lineItems: extractionData.lineItems || [],
+              parentEntities: extractionData.parentEntities || {},
               documentConfidence: extractionData.documentConfidence || 0,
               fileData: fileData, // Still use file from API since callback doesn't include it
+              fileName: fileName,
+              mimeType: mimeType,
               extractionSource: 'callback',
               rawResults: JSON.stringify(extractionData.rawPayload || {})
             };
@@ -1161,6 +1143,7 @@ module.exports = cds.service.impl(async function() {
           const extractionData = {
             headerFields: headerFields,
             lineItems: lineItems,
+            parentEntities: parentEntities,
             documentConfidence: documentData.confidenceScore || 0,
             schemaVersionId: documentData.schemaVersion?.ID,
             clientId: documentData.schema?.clientId,
@@ -1184,8 +1167,11 @@ module.exports = cds.service.impl(async function() {
       return {
         headerFields: headerFields,
         lineItems: lineItems,
+        parentEntities: parentEntities,
         documentConfidence: documentData.confidenceScore || 0,
         fileData: fileData,
+        fileName: fileName,
+        mimeType: mimeType,
         extractionSource: finalExtractionSource,
         rawResults: JSON.stringify(documentData)
       };
@@ -1211,11 +1197,29 @@ module.exports = cds.service.impl(async function() {
         console.log('[INFO] getDocAIResults - Found local extraction data');
         const extractionData = JSON.parse(doc.extractionData);
 
+        // Get PDF file content from local DB if available
+        let localFileData = null;
+        let localFileName = null;
+        let localMimeType = null;
+        if (doc.fileContent) {
+          localFileData = doc.fileContent.toString('base64');
+          console.log('[INFO] getDocAIResults - Local file data retrieved, base64 length:', localFileData.length);
+        } else {
+          console.log('[WARNING] getDocAIResults - No local file content available');
+        }
+
+        // Try to get file metadata from local document record
+        localFileName = doc.fileName || null;
+        localMimeType = doc.mimeType || null;
+
         return {
           headerFields: extractionData.headerFields || [],
           lineItems: extractionData.lineItems || [],
+          parentEntities: extractionData.parentEntities || {},
           documentConfidence: extractionData.documentConfidence || 0,
-          fileData: null, // PDF not available from callback
+          fileData: localFileData,
+          fileName: localFileName,
+          mimeType: localMimeType,
           extractionSource: doc.extractionSource || 'local',
           rawResults: JSON.stringify(extractionData.rawPayload || {})
         };
@@ -1274,14 +1278,132 @@ module.exports = cds.service.impl(async function() {
         const resultsUrl = `${baseUrl}/DocumentService/Documents(${doc.docaiDocumentId})?$expand=versions($expand=entities)`;
         const resultsResponse = await axios.get(resultsUrl, { headers: authHeaders });
 
-        const invoice = parseDocumentResult(resultsResponse.data);
+        const documentData = resultsResponse.data;
+        const versions = documentData.versions || [];
 
-        if (invoice) {
-          console.log(`[INFO] pollAndProcessDocument - Storing extraction results`);
-          await storeExtractionResults(documentId, invoice);
+        if (versions.length > 0) {
+          console.log(`[INFO] pollAndProcessDocument - Storing schema-agnostic extraction results`);
+
+          // Get latest version
+          const latestVersion = versions.reduce((prev, current) =>
+            (current.version > prev.version) ? current : prev
+          );
+
+          const entities = latestVersion.entities || [];
+
+          // Build entity map for parent lookup
+          const entityMap = {};
+          entities.forEach(entity => {
+            entityMap[entity.ID] = entity;
+          });
+
+          // Helper to check if entity's parent is a Table
+          function isTableField(entity) {
+            if (!entity.parent_ID) return false;
+            const parent = entityMap[entity.parent_ID];
+            return parent && parent.type === 'Table';
+          }
+
+          // Fetch schema to get Group/Table labels
+          const schemaVersionId = documentData.schemaVersion?.ID;
+          let schemaEntitiesMap = {};
+          if (schemaVersionId) {
+            try {
+              console.log('[INFO] Fetching schema entities to get Group/Table labels');
+              const schemaUrl = `${baseUrl}/SchemaService/SchemaEntities?$filter=schemaVersion_ID eq ${schemaVersionId} and (type eq 'Group' or type eq 'Table')`;
+              const schemaResponse = await axios.get(schemaUrl, { headers: authHeaders });
+              const schemaEntities = schemaResponse.data.value || [];
+              console.log(`[INFO] Found ${schemaEntities.length} Groups/Tables in schema`);
+
+              // Build map by name for lookup
+              schemaEntities.forEach(entity => {
+                if (entity.name) {
+                  schemaEntitiesMap[entity.name] = entity;
+                }
+              });
+            } catch (schemaError) {
+              console.error('[ERROR] Failed to fetch schema entities:', schemaError.message);
+              // Continue without schema labels
+            }
+          }
+
+          // Separate header fields and line items
+          const headerFields = [];
+          const lineItemGroups = {};
+          const parentEntities = {};
+
+          // First pass: collect Groups and Tables with labels from schema
+          entities.forEach(entity => {
+            if (entity.type === 'Group' || entity.type === 'Table') {
+              const schemaEntity = schemaEntitiesMap[entity.name];
+              parentEntities[entity.ID] = {
+                ID: entity.ID,
+                name: entity.name,
+                label: schemaEntity?.label || entity.label || entity.name,
+                type: entity.type
+              };
+            }
+          });
+
+          // Second pass: Process Fields
+          entities.forEach(entity => {
+            if (entity.type !== 'Field') return;
+
+            if (isTableField(entity)) {
+              const occurrence = entity.occurrence || 1;
+              if (!lineItemGroups[occurrence]) {
+                lineItemGroups[occurrence] = { occurrence: occurrence, fields: [] };
+              }
+              lineItemGroups[occurrence].fields.push({
+                ID: entity.ID,
+                name: entity.name,
+                label: entity.label,
+                dataType: entity.dataType,
+                stringValue: entity.stringValue,
+                numberValue: entity.numberValue,
+                dateValue: entity.dateValue,
+                rawValue: entity.rawValue,
+                confidence: entity.confidence,
+                signedOff: entity.signedOff
+              });
+            } else {
+              headerFields.push({
+                ID: entity.ID,
+                name: entity.name,
+                label: entity.label,
+                dataType: entity.dataType,
+                stringValue: entity.stringValue,
+                numberValue: entity.numberValue,
+                dateValue: entity.dateValue,
+                rawValue: entity.rawValue,
+                confidence: entity.confidence,
+                signedOff: entity.signedOff,
+                parent_ID: entity.parent_ID
+              });
+            }
+          });
+
+          const lineItems = Object.values(lineItemGroups).sort((a, b) => a.occurrence - b.occurrence);
+
+          const extractionData = {
+            headerFields: headerFields,
+            lineItems: lineItems,
+            parentEntities: parentEntities,
+            documentConfidence: documentData.confidenceScore || 0,
+            schemaVersionId: documentData.schemaVersion?.ID,
+            clientId: documentData.schema?.clientId,
+            rawPayload: documentData
+          };
+
           await UPDATE(Documents, documentId).set({
+            extractionData: JSON.stringify(extractionData),
+            schemaVersionId: documentData.schemaVersion?.ID,
+            clientId: documentData.schema?.clientId,
+            extractionSource: 'api',
             status: 'extracted'
           });
+
+          console.log(`[INFO] pollAndProcessDocument - Stored ${headerFields.length} header fields and ${lineItems.length} line items`);
 
           // Auto-validate
           console.log(`[INFO] pollAndProcessDocument - Auto-validating document`);
@@ -1293,7 +1415,8 @@ module.exports = cds.service.impl(async function() {
           return {
             status: 'extracted',
             message: 'Extraction completed and validated',
-            invoice
+            headerFields: headerFields,
+            lineItems: lineItems
           };
         }
       }
@@ -1357,10 +1480,12 @@ module.exports = cds.service.impl(async function() {
       console.log(`[INFO] processDocumentWithPolling - [${documentId}] Submitting to DocAI...`);
       await UPDATE(Documents, documentId).set({ status: 'processing' });
 
-      const docaiDocumentId = await submitToDocAI(doc.fileContent, doc.fileName, schemaId);
+      const { documentId: docaiDocumentId, clientId: docaiClientId } = await submitToDocAI(doc.fileContent, doc.fileName, schemaId);
 
       await UPDATE(Documents, documentId).set({
         docaiDocumentId,
+        clientId: docaiClientId,
+        schemaVersionId: schemaId,
         extractionStatus: 'inProgress'
       });
 
@@ -1398,12 +1523,132 @@ module.exports = cds.service.impl(async function() {
         const resultsUrl = `${baseUrl}/DocumentService/Documents(${docaiDocumentId})?$expand=versions($expand=entities)`;
         const resultsResponse = await axios.get(resultsUrl, { headers: authHeaders });
 
-        const invoice = parseDocumentResult(resultsResponse.data);
+        const documentData = resultsResponse.data;
+        const versions = documentData.versions || [];
 
-        if (invoice) {
-          console.log(`[INFO] processDocumentWithPolling - [${documentId}] Storing extraction results`);
-          await storeExtractionResults(documentId, invoice);
-          await UPDATE(Documents, documentId).set({ status: 'extracted' });
+        if (versions.length > 0) {
+          console.log(`[INFO] processDocumentWithPolling - [${documentId}] Storing schema-agnostic extraction results`);
+
+          // Get latest version
+          const latestVersion = versions.reduce((prev, current) =>
+            (current.version > prev.version) ? current : prev
+          );
+
+          const entities = latestVersion.entities || [];
+
+          // Build entity map for parent lookup
+          const entityMap = {};
+          entities.forEach(entity => {
+            entityMap[entity.ID] = entity;
+          });
+
+          // Helper to check if entity's parent is a Table
+          function isTableField(entity) {
+            if (!entity.parent_ID) return false;
+            const parent = entityMap[entity.parent_ID];
+            return parent && parent.type === 'Table';
+          }
+
+          // Fetch schema to get Group/Table labels
+          const schemaVersionId = documentData.schemaVersion?.ID;
+          let schemaEntitiesMap = {};
+          if (schemaVersionId) {
+            try {
+              console.log('[INFO] Fetching schema entities to get Group/Table labels');
+              const schemaUrl = `${baseUrl}/SchemaService/SchemaEntities?$filter=schemaVersion_ID eq ${schemaVersionId} and (type eq 'Group' or type eq 'Table')`;
+              const schemaResponse = await axios.get(schemaUrl, { headers: authHeaders });
+              const schemaEntities = schemaResponse.data.value || [];
+              console.log(`[INFO] Found ${schemaEntities.length} Groups/Tables in schema`);
+
+              // Build map by name for lookup
+              schemaEntities.forEach(entity => {
+                if (entity.name) {
+                  schemaEntitiesMap[entity.name] = entity;
+                }
+              });
+            } catch (schemaError) {
+              console.error('[ERROR] Failed to fetch schema entities:', schemaError.message);
+              // Continue without schema labels
+            }
+          }
+
+          // Separate header fields and line items
+          const headerFields = [];
+          const lineItemGroups = {};
+          const parentEntities = {};
+
+          // First pass: collect Groups and Tables with labels from schema
+          entities.forEach(entity => {
+            if (entity.type === 'Group' || entity.type === 'Table') {
+              const schemaEntity = schemaEntitiesMap[entity.name];
+              parentEntities[entity.ID] = {
+                ID: entity.ID,
+                name: entity.name,
+                label: schemaEntity?.label || entity.label || entity.name,
+                type: entity.type
+              };
+            }
+          });
+
+          // Second pass: Process Fields
+          entities.forEach(entity => {
+            if (entity.type !== 'Field') return;
+
+            if (isTableField(entity)) {
+              const occurrence = entity.occurrence || 1;
+              if (!lineItemGroups[occurrence]) {
+                lineItemGroups[occurrence] = { occurrence: occurrence, fields: [] };
+              }
+              lineItemGroups[occurrence].fields.push({
+                ID: entity.ID,
+                name: entity.name,
+                label: entity.label,
+                dataType: entity.dataType,
+                stringValue: entity.stringValue,
+                numberValue: entity.numberValue,
+                dateValue: entity.dateValue,
+                rawValue: entity.rawValue,
+                confidence: entity.confidence,
+                signedOff: entity.signedOff
+              });
+            } else {
+              headerFields.push({
+                ID: entity.ID,
+                name: entity.name,
+                label: entity.label,
+                dataType: entity.dataType,
+                stringValue: entity.stringValue,
+                numberValue: entity.numberValue,
+                dateValue: entity.dateValue,
+                rawValue: entity.rawValue,
+                confidence: entity.confidence,
+                signedOff: entity.signedOff,
+                parent_ID: entity.parent_ID
+              });
+            }
+          });
+
+          const lineItems = Object.values(lineItemGroups).sort((a, b) => a.occurrence - b.occurrence);
+
+          const extractionData = {
+            headerFields: headerFields,
+            lineItems: lineItems,
+            parentEntities: parentEntities,
+            documentConfidence: documentData.confidenceScore || 0,
+            schemaVersionId: documentData.schemaVersion?.ID,
+            clientId: documentData.schema?.clientId,
+            rawPayload: documentData
+          };
+
+          await UPDATE(Documents, documentId).set({
+            extractionData: JSON.stringify(extractionData),
+            schemaVersionId: documentData.schemaVersion?.ID,
+            clientId: documentData.schema?.clientId,
+            extractionSource: 'api',
+            status: 'extracted'
+          });
+
+          console.log(`[INFO] processDocumentWithPolling - [${documentId}] Stored ${headerFields.length} header fields and ${lineItems.length} line items`);
 
           // Auto-validate
           console.log(`[INFO] processDocumentWithPolling - [${documentId}] Auto-validating`);
@@ -1418,7 +1663,8 @@ module.exports = cds.service.impl(async function() {
             status: 'extracted',
             message: 'Extraction completed and validated',
             polls,
-            invoice
+            headerFields: headerFields,
+            lineItems: lineItems
           };
         }
       } else if (status === 'failed') {
