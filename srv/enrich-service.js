@@ -1,14 +1,21 @@
 /**
- * Callback Enrichment Service Implementation
+ * Enrich Service Implementation
  *
- * Workshop-specific enrichment endpoint that validates and enriches documents
+ * Demo enrichment endpoint that validates and enriches documents
  * with supplier IDs before auto-confirming them in DocAI.
+ *
+ * This service demonstrates how to:
+ * - Receive DocAI callbacks
+ * - Look up business data (supplier IDs)
+ * - Update document entities in DocAI
+ * - Auto-confirm documents when validation passes
  */
 
 const cds = require('@sap/cds');
 const { parseGroovyToJson } = require('./utils/groovy-parser');
 
-// Workshop invoice data - hardcoded for demo purposes
+// Demo invoice data - hardcoded for PoC purposes
+// In production, replace with actual ERP/master data lookups
 const WORKSHOP_INVOICES = {
   'XCB-1234-0001': { poNumber: 'UKTY9988', supplierName: 'Umbro LLC', supplierID: 'SUP-001' },
   'NFI-001-00020': { poNumber: null, supplierName: 'Norsk Folkehjelp', supplierID: 'SUP-002' },
@@ -54,7 +61,7 @@ module.exports = cds.service.impl(async function() {
    * DocAI Enrichment Callback Handler
    * Pure enrichment - no local database operations
    */
-  this.on('callbackEnrich', async (req) => {
+  this.on('callback', async (req) => {
     try {
       console.log('\n=== DocAI Enrichment Callback Received ===');
 
@@ -80,9 +87,9 @@ module.exports = cds.service.impl(async function() {
       console.log(`📊 Status: ${NotificationTargetStatus}`);
 
       // Only process reviewNeeded documents
-      if (NotificationTargetStatus !== 'reviewNeeded') {
-        console.log(`⏭️  Skipping - Status is '${NotificationTargetStatus}', not 'reviewNeeded'`);
-        return "Skipped - not reviewNeeded status";
+      if ((NotificationTargetStatus !== 'reviewNeeded') && (NotificationTargetStatus !== 'inProgress')) {
+        console.log(`⏭️  Skipping - Status is '${NotificationTargetStatus}', not 'reviewNeeded' or 'inProgress'`);
+        return "Skipped - not reviewNeeded or inProgress status";
       }
 
       // Fetch document from DocAI API

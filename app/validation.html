@@ -156,7 +156,7 @@
                 log("Checking status for: " + currentDocumentId, false);
                 oBusyDialog.open();
 
-                fetch(getApiBasePath() + "document/getDocAIStatus", {
+                fetch(getApiBasePath() + "ui/getDocAIStatus", {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json"
@@ -200,7 +200,7 @@
             function fetchSchemaFields(schemaVersionId) {
                 log("Fetching schema fields for version ID: " + schemaVersionId, false);
 
-                return fetch(getApiBasePath() + "document/getSchemaFields", {
+                return fetch(getApiBasePath() + "ui/getSchemaFields", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -233,7 +233,7 @@
             function fetchDocumentEntities(documentId) {
                 log("Fetching document entities for ID: " + documentId, false);
 
-                return fetch(getApiBasePath() + "document/getDocAIResults", {
+                return fetch(getApiBasePath() + "ui/getDocAIResults", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -759,7 +759,7 @@
                 }
 
                 // Call the CAP action that updates and confirms
-                fetch(getApiBasePath() + "document/updateAndConfirmDocument", {
+                fetch(getApiBasePath() + "ui/updateAndConfirmDocument", {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json"
@@ -806,7 +806,7 @@
                 log("Starting enrichment and auto-confirmation...", false);
 
                 // First get the document status and result to build callback payload
-                fetch(getApiBasePath() + "document/getDocAIStatus", {
+                fetch(getApiBasePath() + "ui/getDocAIStatus", {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json"
@@ -820,7 +820,7 @@
                     log("Got document status for enrichment", false);
 
                     // Get document result
-                    return fetch(getApiBasePath() + "document/getDocAIResults", {
+                    return fetch(getApiBasePath() + "ui/getDocAIResults", {
                         method: "POST",
                         headers: {
                             "Content-Type": "application/json"
@@ -870,7 +870,7 @@
                         log("Calling enrichment endpoint...", false);
 
                         // Call enrichment endpoint
-                        return fetch("./odata/v4/callback-enrich/callbackEnrich", {
+                        return fetch("./odata/enrich/callback", {
                             method: "POST",
                             headers: {
                                 "Content-Type": "application/json"
@@ -1085,12 +1085,35 @@
 
             oApp.placeAt("content");
 
+            // Get DocAI UI URL from environment or use default
+            function getDocAIUrl(documentId) {
+                // Fetch from server environment variable
+                return fetch(getApiBasePath() + "ui/getEnvironment", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        var baseUrl = data.DOCAI_UI_URL || "https://document-information-extraction.cfapps.eu10.hana.ondemand.com/workspace";
+                        return baseUrl + "#/Documents(" + documentId + ")";
+                    })
+                    .catch(() => {
+                        // Fallback to default
+                        return "https://document-information-extraction.cfapps.eu10.hana.ondemand.com/workspace#/Documents(" + documentId + ")";
+                    });
+            }
+
             // Initialize on load
             if (urlDocId) {
                 currentDocumentId = urlDocId;
-                var docaiUrl = "https://docai-workshop.eu10.doc.cloud.sap/workspace#/Documents(" + currentDocumentId + ")";
-                oDocumentIdLink.setText("Document ID: " + currentDocumentId);
-                oDocumentIdLink.setHref(docaiUrl);
+
+                getDocAIUrl(currentDocumentId).then(function(docaiUrl) {
+                    oDocumentIdLink.setText("Document ID: " + currentDocumentId);
+                    oDocumentIdLink.setHref(docaiUrl);
+                });
+
                 log("Loaded document ID from URL: " + currentDocumentId, false);
 
                 // Check status immediately

@@ -2049,4 +2049,13 @@ module.exports = cds.service.impl(async function() {
       req.error(500, `Failed to post supplier invoice: ${error.response?.data?.error?.message?.value || error.message}`);
     }
   });
+
+  /**
+   * Get environment variables for UI
+   */
+  this.on('getEnvironment', async (req) => {
+    return {
+      DOCAI_UI_URL: process.env.DOCAI_UI_URL || "https://document-information-extraction.cfapps.eu10.hana.ondemand.com/workspace"
+    };
+  });
 });

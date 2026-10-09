@@ -1,14 +1,14 @@
 using { com.sap.docai as db } from '../db/schema';
 
 /**
- * Callback Service for SAP Document Information Extraction
+ * Post Service for SAP Document Information Extraction
  *
  * Receives callbacks from DocAI service when document processing completes.
  * Handles any schema type - extracts and stores results dynamically.
  */
 @requires: 'system-user'
 @cds.server.body_parser.limit: '50mb'
-service CallbackService @(path: '/odata/v4/callback') {
+service PostService @(path: '/post') {
 
   /**
    * DocAI callback endpoint

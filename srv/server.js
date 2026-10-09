@@ -3,6 +3,13 @@
  *
  * Configures custom middleware to handle callbacks from SAP Document Information
  * Extraction (DocAI) service with CSRF protection and large payload support.
+ *
+ * CSRF TOKEN FLOW:
+ * DocAI's outbound channel automatically handles CSRF token authentication:
+ * 1. Before sending callback, DocAI sends HEAD request to get CSRF token
+ * 2. Server responds with X-CSRF-Token in response header
+ * 3. DocAI includes this token in X-CSRF-Token header when POSTing callback
+ * 4. Server validates the token before processing the callback
  */
 
 const cds = require('@sap/cds');
@@ -18,6 +25,10 @@ const cookieParser = require('cookie-parser');
  * Protects against cross-site request forgery attacks by requiring a valid token
  * for POST requests. The token is stored in a cookie and must be sent in the
  * X-CSRF-Token header.
+ *
+ * DocAI automatically handles this by:
+ * 1. Calling HEAD endpoint to fetch token
+ * 2. Including token in POST callback request
  */
 const csrfProtection = csrf({ cookie: true });
 
@@ -39,12 +50,16 @@ cds.on('bootstrap', (app) => {
   app.use(parseJson);
 
   /**
-   * HEAD ENDPOINT: CSRF Token Request
+   * HEAD ENDPOINT: CSRF Token Request for Post Service
    *
-   * Provides CSRF tokens to clients before they can POST data.
-   * DocAI service will call this before sending callback.
+   * DocAI automatically calls this HEAD endpoint before sending POST callback
+   * to obtain a CSRF token. The token is returned in the X-CSRF-Token header.
+   *
+   * Configure in DocAI Outbound Channel:
+   * - URL: https://<your-app>/post/callback
+   * - DocAI will automatically prefix with HEAD request
    */
-  app.head('/odata/v4/callback/callback', csrfProtection, (req, res) => {
+  app.head('/post/callback', csrfProtection, (req, res) => {
     res.set({
       'X-CSRF-Token': req.csrfToken(),
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate'
@@ -52,29 +67,36 @@ cds.on('bootstrap', (app) => {
   });
 
   /**
-   * POST ENDPOINT: DocAI Callback Handler
+   * POST ENDPOINT: DocAI Post Callback Handler
    *
    * Receives extraction results from SAP Document Information Extraction service.
+   * Stores extraction results in the database.
    *
    * Middleware chain:
    * 1. parseForm - Parses URL-encoded data (fallback format)
    * 2. csrfProtection - Validates CSRF token from HEAD request
-   * 3. next() - Forwards to CDS service handler (callback-service.js)
+   * 3. next() - Forwards to CDS service handler (post-service.js)
    *
    * Note: parseJson is already applied globally above
+   * Note: CSRF token validation is automatic - DocAI includes token from HEAD request
    */
-  app.post('/odata/v4/callback/callback', parseForm, csrfProtection, (req, res, next) => {
+  app.post('/post/callback', parseForm, csrfProtection, (req, res, next) => {
     // Payload is now parsed and available in req.body
     // Forward to CDS service handler for processing
     next();
   });
 
   /**
-   * HEAD ENDPOINT: CSRF Token Request for Callback Enrich
+   * HEAD ENDPOINT: CSRF Token Request for Enrich Service
    *
-   * Provides CSRF tokens to clients before they can POST to callback-enrich endpoint.
+   * DocAI automatically calls this HEAD endpoint before sending POST callback
+   * to obtain a CSRF token. The token is returned in the X-CSRF-Token header.
+   *
+   * Configure in DocAI Outbound Channel:
+   * - URL: https://<your-app>/enrich/callback
+   * - DocAI will automatically prefix with HEAD request
    */
-  app.head('/odata/v4/callback-enrich/callbackEnrich', csrfProtection, (req, res) => {
+  app.head('/enrich/callback', csrfProtection, (req, res) => {
     res.set({
       'X-CSRF-Token': req.csrfToken(),
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate'
@@ -82,7 +104,7 @@ cds.on('bootstrap', (app) => {
   });
 
   /**
-   * POST ENDPOINT: DocAI Callback Enrich Handler
+   * POST ENDPOINT: DocAI Enrich Callback Handler
    *
    * Receives extraction results from SAP Document Information Extraction service
    * for enrichment processing (adds supplier IDs and auto-confirms documents).
@@ -90,11 +112,12 @@ cds.on('bootstrap', (app) => {
    * Middleware chain:
    * 1. parseForm - Parses URL-encoded data (fallback format)
    * 2. csrfProtection - Validates CSRF token from HEAD request
-   * 3. next() - Forwards to CDS service handler (callback-enrich-service.js)
+   * 3. next() - Forwards to CDS service handler (enrich-service.js)
    *
    * Note: parseJson is already applied globally above
+   * Note: CSRF token validation is automatic - DocAI includes token from HEAD request
    */
-  app.post('/odata/v4/callback-enrich/callbackEnrich', parseForm, csrfProtection, (req, res, next) => {
+  app.post('/enrich/callback', parseForm, csrfProtection, (req, res, next) => {
     // Payload is now parsed and available in req.body
     // Forward to CDS service handler for processing
     next();

@@ -2,7 +2,7 @@ using { com.sap.docai as db } from '../db/schema';
 
 @requires: ['system-user', 'authenticated-user']
 @cds.server.body_parser.limit: '50mb'
-service DocumentProcessingService @(path: '/document') {
+service UIService @(path: '/ui') {
 
   entity ProcessingBatches as projection on db.ProcessingBatches;
   entity Documents as projection on db.Documents;
@@ -199,6 +199,10 @@ service DocumentProcessingService @(path: '/document') {
     FiscalYear: String;
     success: Boolean;
     message: String;
+  };
+
+  action getEnvironment() returns {
+    DOCAI_UI_URL: String;
   };
 }
 

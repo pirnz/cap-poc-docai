@@ -71,7 +71,7 @@
             function loadClients() {
                 oClientsModel.setProperty("/loading", true);
 
-                fetch(getApiBasePath() + "document/getSchemaClients", {
+                fetch(getApiBasePath() + "ui/getSchemaClients", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({})
@@ -109,7 +109,7 @@
             function loadSchemaVersions() {
                 oSchemaVersionsModel.setProperty("/loading", true);
 
-                fetch(getApiBasePath() + "document/getSchemaVersionsList", {
+                fetch(getApiBasePath() + "ui/getSchemaVersionsList", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({})
@@ -213,7 +213,7 @@
                         schemaId: selectedSchemaVersionId
                     };
 
-                    fetch(getApiBasePath() + "document/uploadFile", {
+                    fetch(getApiBasePath() + "ui/uploadFile", {
                         method: "POST",
                         headers: {
                             "Content-Type": "application/json"
@@ -233,7 +233,7 @@
                         oProgress.setDisplayValue("Fetching documents...");
 
                         // Step 2: Get document IDs from the batch
-                        return fetch(getApiBasePath() + "document/ProcessingBatches(" + batchId + ")?$expand=documents")
+                        return fetch(getApiBasePath() + "ui/ProcessingBatches(" + batchId + ")?$expand=documents")
                             .then(response => response.json())
                             .then(batch => {
                                 if (!batch.documents || batch.documents.length === 0) {
@@ -245,7 +245,7 @@
 
                                 // Step 3: Process each document (send to DocAI)
                                 var processPromises = batch.documents.map(function(doc) {
-                                    return fetch(getApiBasePath() + "document/processDocument", {
+                                    return fetch(getApiBasePath() + "ui/processDocument", {
                                         method: "POST",
                                         headers: {
                                             "Content-Type": "application/json"

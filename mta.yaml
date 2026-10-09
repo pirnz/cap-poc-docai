@@ -9,7 +9,6 @@ build-parameters:
   before-all:
     - builder: custom
       commands:
-        - npm ci
         - npx cds build --production
         - cp -r db.sqlite gen/srv
 modules:
@@ -20,7 +19,9 @@ modules:
       instances: 1
       buildpack: nodejs_buildpack
     build-parameters:
-      builder: npm-ci
+      builder: npm
+    properties:
+      DOCAI_UI_URL: https://docai-workshop.eu10.doc.cloud.sap/workspace
     provides:
       - name: srv-api # required by consumers of CAP services (e.g. approuter)
         properties:

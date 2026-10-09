@@ -1,7 +1,7 @@
-using DocumentProcessingService from '../srv/document-service';
+using UIService from '../srv/ui-service';
 
 // Annotations for ProcessingBatches List Report
-annotate DocumentProcessingService.ProcessingBatches with @(
+annotate UIService.ProcessingBatches with @(
   UI.SelectionFields: [
     fileName,
     fileType,
@@ -60,7 +60,7 @@ annotate DocumentProcessingService.ProcessingBatches with @(
 };
 
 // Object Page for ProcessingBatches
-annotate DocumentProcessingService.ProcessingBatches with @(
+annotate UIService.ProcessingBatches with @(
   UI.HeaderInfo: {
     TypeName: 'Processing Batch',
     TypeNamePlural: 'Processing Batches',
@@ -94,7 +94,7 @@ annotate DocumentProcessingService.ProcessingBatches with @(
 );
 
 // Annotations for Documents
-annotate DocumentProcessingService.Documents with @(
+annotate UIService.Documents with @(
   UI.SelectionFields: [
     fileName,
     status,
@@ -124,12 +124,12 @@ annotate DocumentProcessingService.Documents with @(
     },
     {
       $Type: 'UI.DataFieldForAction',
-      Action: 'DocumentProcessingService.processDocument',
+      Action: 'UIService.processDocument',
       Label: 'Process Document'
     },
     {
       $Type: 'UI.DataFieldForAction',
-      Action: 'DocumentProcessingService.validateDocument',
+      Action: 'UIService.validateDocument',
       Label: 'Validate'
     }
   ]
@@ -143,7 +143,7 @@ annotate DocumentProcessingService.Documents with @(
 };
 
 // Object Page for Documents
-annotate DocumentProcessingService.Documents with @(
+annotate UIService.Documents with @(
   UI.HeaderInfo: {
     TypeName: 'Document',
     TypeNamePlural: 'Documents',
@@ -188,7 +188,7 @@ annotate DocumentProcessingService.Documents with @(
 );
 
 // Annotations for ValidationResults
-annotate DocumentProcessingService.ValidationResults with @(
+annotate UIService.ValidationResults with @(
   UI.LineItem: [
     {
       $Type: 'UI.DataField',

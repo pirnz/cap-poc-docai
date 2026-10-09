@@ -63,7 +63,7 @@
             function loadAllDocuments() {
                 oBusyDialog.open();
 
-                fetch(getApiBasePath() + "document/Documents", {
+                fetch(getApiBasePath() + "ui/Documents", {
                     method: "GET",
                     headers: {
                         "Content-Type": "application/json"
@@ -169,10 +169,30 @@
                 return "None";
             }
 
+            // DocAI UI base URL (will be fetched from environment)
+            var docAIBaseUrl = "https://document-information-extraction.cfapps.eu10.hana.ondemand.com/workspace";
+
+            // Fetch DocAI UI URL from environment on load
+            fetch(getApiBasePath() + "ui/getEnvironment", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                }
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.DOCAI_UI_URL) {
+                        docAIBaseUrl = data.DOCAI_UI_URL;
+                    }
+                })
+                .catch(() => {
+                    // Use default if fetch fails
+                });
+
             // Format Document ID as DocAI link
             function getDocAILink(documentId) {
                 if (!documentId) return null;
-                return "https://docai-workshop.eu10.doc.cloud.sap/workspace#/Documents(" + documentId + ")";
+                return docAIBaseUrl + "#/Documents(" + documentId + ")";
             }
 
             // Documents table
