@@ -1,0 +1,5 @@
+code;name;description
+ROUTED;Routed;Document has been routed
+PENDING_ROUTING;Pending Routing;Routing is pending
+ROUTING_FAILED;Routing Failed;Routing has failed
+NOT_ROUTABLE;Not Routable;Document cannot be routed

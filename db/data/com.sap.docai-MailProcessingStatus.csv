@@ -1,0 +1,6 @@
+code;name;description
+PROCESSING;Processing;Mail is being processed
+COMPLETED;Completed;Mail processing completed successfully
+FAILED;Failed;Mail processing failed
+PENDING;Pending;Mail is pending processing
+EXTRACTED;Extracted;Data extracted from mail

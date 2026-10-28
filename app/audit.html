@@ -1,0 +1,1612 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audit Dashboard - DocAI</title>
+    <script
+        id="sap-ui-bootstrap"
+        src="https://ui5.sap.com/1.148.10/resources/sap-ui-core.js"
+        data-sap-ui-theme="sap_horizon"
+        data-sap-ui-libs="sap.m,sap.ui.core"
+        data-sap-ui-async="true"
+        data-sap-ui-compatVersion="edge"
+        data-sap-ui-xx-waitForTheme="true"
+    ></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script>
+        sap.ui.require([
+            "sap/m/App",
+            "sap/m/Page",
+            "sap/m/VBox",
+            "sap/m/HBox",
+            "sap/m/Title",
+            "sap/m/Text",
+            "sap/m/Button",
+            "sap/m/MessageToast",
+            "sap/m/MessageBox",
+            "sap/m/Label",
+            "sap/m/ObjectStatus",
+            "sap/ui/model/json/JSONModel",
+            "sap/m/Table",
+            "sap/m/Column",
+            "sap/m/ColumnListItem",
+            "sap/m/Link",
+            "sap/m/Panel",
+            "sap/m/ComboBox",
+            "sap/m/SegmentedButton",
+            "sap/m/SegmentedButtonItem",
+            "sap/ui/core/Item",
+            "sap/m/BusyDialog",
+            "sap/ui/core/HTML",
+            "sap/m/ProgressIndicator",
+            "sap/m/FlexItemData",
+            "sap/m/NumericContent",
+            "sap/m/TileContent",
+            "sap/m/GenericTile",
+            "sap/m/Input",
+            "sap/m/Select",
+            "sap/m/IconTabBar",
+            "sap/m/IconTabFilter",
+            "sap/m/Toolbar",
+            "sap/m/ToolbarSpacer",
+            "sap/m/SearchField"
+        ], function (App, Page, VBox, HBox, Title, Text, Button, MessageToast, MessageBox, Label,
+                     ObjectStatus, JSONModel, Table, Column, ColumnListItem, Link, Panel, ComboBox,
+                     SegmentedButton, SegmentedButtonItem, Item, BusyDialog, HTML, ProgressIndicator, FlexItemData,
+                     NumericContent, TileContent, GenericTile, Input, Select, IconTabBar, IconTabFilter, Toolbar, ToolbarSpacer, SearchField) {
+
+            // Helper function: Get API base path
+            function getApiBasePath() {
+                var isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+                // Use port 4005 for local development as per package.json configuration
+                if (isLocalhost && window.location.port !== '4005') {
+                    return 'http://localhost:4005/';
+                }
+                return isLocalhost ? './' : './odata/';
+            }
+
+            // Data models
+            var oViewModel = new JSONModel({
+                lastRefresh: null,
+                isRefreshing: false,
+                selectedClient: "All Clients",
+                selectedSchema: "All Schemas",
+                timeRangeSize: "1m",  // Size of time window - default to 1 month
+                timeOffset: 0,  // Days back from today (0 = today, 1 = yesterday, etc.)
+                clients: [],
+                schemas: [],
+                clientSummary: [],
+                usageTrend: [],
+                confidenceTrend: [],
+                auditMetrics: [],
+                dateRangeLabel: "",
+                kpis: {
+                    avgProcessingTime: 0,
+                    avgExtractionChanges: 0,
+                    avgAcceptanceAccuracy: 0,
+                    totalExtractions: 0
+                },
+                filters: {
+                    search: "",
+                    mailId: "",
+                    mailProcessingStatus: "",
+                    responsibilityRegion: "",
+                    partnerProfile: "",
+                    companySystemCommunication: "",
+                    documentNumberCustomer: "",
+                    senderEmailAddress: "",
+                    receivedAt: "",
+                    attachmentProcessingStatus: "Not Selected",
+                    attachmentExtractionStatus: "Not Selected",
+                    documentType: "Not Selected",
+                    partnerSenderIdentifierSystem: "",
+                    companyReceiverIdentifier: "",
+                    autoProcessed: "Not Selected",
+                    basicRoutingStatus: ""
+                },
+                // Value lists for filters
+                mailProcessingStatusList: [],
+                responsibilityRegionList: [],
+                partnerProfileList: [],
+                attachmentProcessingStatusList: [],
+                attachmentExtractionStatusList: [],
+                documentTypeList: [],
+                basicRoutingStatusList: []
+            });
+
+            var oBusyDialog = new BusyDialog({
+                text: "Loading data..."
+            });
+
+            // DocAI UI base URL
+            var docAIBaseUrl = "https://document-information-extraction.cfapps.eu10.hana.ondemand.com/workspace";
+
+            // Fetch DocAI UI URL from environment
+            fetch(getApiBasePath() + "ui/getEnvironment", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" }
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.DOCAI_UI_URL) {
+                        docAIBaseUrl = data.DOCAI_UI_URL;
+                    }
+                })
+                .catch(() => { /* Use default */ });
+
+            // Format date range label
+            function formatDateRangeLabel() {
+                var offset = oViewModel.getProperty("/timeOffset");
+                var rangeSize = oViewModel.getProperty("/timeRangeSize");
+
+                var endDate = new Date();
+                endDate.setDate(endDate.getDate() - offset);
+                endDate.setHours(23, 59, 59, 999);
+
+                var startDate = new Date(endDate);
+
+                // Calculate start date based on range size
+                switch(rangeSize) {
+                    case "1d": startDate.setDate(startDate.getDate() - 1); break;
+                    case "2d": startDate.setDate(startDate.getDate() - 2); break;
+                    case "3d": startDate.setDate(startDate.getDate() - 3); break;
+                    case "1w": startDate.setDate(startDate.getDate() - 7); break;
+                    case "2w": startDate.setDate(startDate.getDate() - 14); break;
+                    case "1m": startDate.setDate(startDate.getDate() - 30); break;
+                }
+                startDate.setHours(0, 0, 0, 0);
+
+                var formatOpts = { month: 'short', day: 'numeric', year: 'numeric' };
+                var label = startDate.toLocaleDateString('en-US', formatOpts) + " - " +
+                           endDate.toLocaleDateString('en-US', formatOpts);
+
+                oViewModel.setProperty("/dateRangeLabel", label);
+                return label;
+            }
+
+            // Navigate time: direction = -1 (backward) or 1 (forward)
+            function navigateTime(direction) {
+                var currentOffset = oViewModel.getProperty("/timeOffset");
+                var rangeSize = oViewModel.getProperty("/timeRangeSize");
+
+                // Calculate step size based on range
+                var step = 1;
+                switch(rangeSize) {
+                    case "1d": case "2d": case "3d": step = 1; break;
+                    case "1w": step = 7; break;
+                    case "2w": step = 14; break;
+                    case "1m": step = 30; break;
+                }
+
+                var newOffset = currentOffset + (step * direction);
+
+                // Don't go into the future
+                if (newOffset < 0) newOffset = 0;
+
+                oViewModel.setProperty("/timeOffset", newOffset);
+                formatDateRangeLabel();
+                loadUsageTrend();
+                loadAuditMetrics();
+            }
+
+            // Reset to today
+            function resetToToday() {
+                oViewModel.setProperty("/timeOffset", 0);
+                formatDateRangeLabel();
+                loadUsageTrend();
+                loadAuditMetrics();
+            }
+
+            // Format timestamp
+            function formatTimestamp(timestamp) {
+                if (!timestamp) return "-";
+                var date = new Date(timestamp);
+                return date.toLocaleString();
+            }
+
+            // Format relative time
+            function formatRelativeTime(timestamp) {
+                if (!timestamp) return "";
+                var now = new Date();
+                var past = new Date(timestamp);
+                var diffMs = now - past;
+                var diffMins = Math.floor(diffMs / 60000);
+                var diffHours = Math.floor(diffMs / 3600000);
+                var diffDays = Math.floor(diffMs / 86400000);
+
+                if (diffMins < 1) return "just now";
+                if (diffMins < 60) return diffMins + " min ago";
+                if (diffHours < 24) return diffHours + " hour" + (diffHours > 1 ? "s" : "") + " ago";
+                return diffDays + " day" + (diffDays > 1 ? "s" : "") + " ago";
+            }
+
+            // Format duration (ms to seconds)
+            function formatDuration(ms) {
+                if (ms === null || ms === undefined) return "-";
+                return (ms / 1000).toFixed(2);
+            }
+
+            // Format confidence percentage
+            function formatConfidence(confidence) {
+                if (confidence === null || confidence === undefined) return "-";
+                return Math.round(confidence * 100) + "%";
+            }
+
+            // Get confidence state
+            function getConfidenceState(confidence) {
+                if (confidence === null || confidence === undefined) return "None";
+                if (confidence < 0.5) return "Error";
+                if (confidence < 0.8) return "Warning";
+                return "Success";
+            }
+
+            // Get status state
+            function getStatusState(status) {
+                if (!status) return "None";
+                var statusUpper = status.toUpperCase();
+                if (statusUpper === "DONE" || statusUpper === "SUCCEEDED" || statusUpper === "CONFIRMED") {
+                    return "Success";
+                }
+                if (statusUpper === "REVIEWNEEDED" || statusUpper === "REVIEW_NEEDED") {
+                    return "Warning";
+                }
+                if (statusUpper === "FAILED" || statusUpper === "ERROR") {
+                    return "Error";
+                }
+                return "Information";
+            }
+
+            // Get DocAI link
+            function getDocAILink(documentId) {
+                if (!documentId) return null;
+                return docAIBaseUrl + "#/Documents(" + documentId + ")";
+            }
+
+            // Chart instances
+            var usageChart = null;
+            var confidenceChart = null;
+
+            // Initialize combined chart (bar + line)
+            function initUsageChart() {
+                console.log('[DEBUG] initUsageChart called');
+                var canvas = document.getElementById('usageChart');
+                if (!canvas) {
+                    console.error('[ERROR] Canvas element usageChart not found');
+                    return;
+                }
+                console.log('[DEBUG] Canvas element found:', canvas);
+
+                var ctx = canvas.getContext('2d');
+                console.log('[DEBUG] Chart.js available:', typeof Chart !== 'undefined');
+
+                usageChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Mail Count',
+                            data: [],
+                            backgroundColor: 'rgba(91, 137, 201, 0.9)',
+                            borderColor: 'rgba(91, 137, 201, 1)',
+                            borderWidth: 1,
+                            yAxisID: 'y',
+                            order: 2
+                        }, {
+                            label: 'Business Extraction Acceptance Accuracy Percentage (Average)',
+                            data: [],
+                            type: 'line',
+                            borderColor: 'rgba(237, 125, 49, 1)',
+                            backgroundColor: 'rgba(237, 125, 49, 0.1)',
+                            tension: 0.3,
+                            fill: false,
+                            yAxisID: 'y1',
+                            order: 1,
+                            pointRadius: 4,
+                            pointHoverRadius: 6,
+                            borderWidth: 2.5
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'bottom'
+                            },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false,
+                                callbacks: {
+                                    afterLabel: function(context) {
+                                        var data = oViewModel.getProperty("/usageTrend")[context.dataIndex];
+                                        if (data && context.datasetIndex === 0) {
+                                            var lines = [];
+                                            if (data.avgDuration) {
+                                                lines.push('Avg Duration: ' + formatDuration(data.avgDuration) + 's');
+                                            }
+                                            return lines;
+                                        }
+                                        return [];
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
+                                beginAtZero: true,
+                                max: 500,
+                                ticks: {
+                                    stepSize: 50
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Mail Count (Extraction Documents Count sent to docai)'
+                                }
+                            },
+                            y1: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                beginAtZero: true,
+                                max: 100,
+                                grid: {
+                                    drawOnChartArea: false
+                                },
+                                ticks: {
+                                    callback: function(value) {
+                                        return value + '%';
+                                    }
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Business Extraction Acceptance Accuracy Percentage (Average)'
+                                }
+                            },
+                            x: {
+                                ticks: {
+                                    maxRotation: 0,
+                                    minRotation: 0
+                                },
+                                grid: {
+                                    display: true
+                                }
+                            }
+                        }
+                    }
+                });
+                console.log('[DEBUG] Usage chart initialized successfully');
+            }
+
+            // Initialize confidence chart (line chart) - no longer needed
+            function initConfidenceChart() {
+                console.log('[DEBUG] Confidence chart no longer needed - using combined chart');
+            }
+
+            // Get calendar week (CW) from date
+            function getCalendarWeek(date) {
+                var d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+                var dayNum = d.getUTCDay() || 7;
+                d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+                var yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+                var weekNo = Math.ceil((((d - yearStart) / 86400000) + 1)/7);
+                return 'CW ' + String(weekNo).padStart(2, '0');
+            }
+
+            // Update combined chart with new data
+            function updateUsageChart(trendData) {
+                console.log('[DEBUG] updateUsageChart called with', trendData.length, 'data points');
+                if (!usageChart) {
+                    console.error('[ERROR] usageChart is not initialized');
+                    return;
+                }
+
+                var labels = trendData.map(function(item) {
+                    var date = new Date(item.timestamp);
+                    var rangeSize = oViewModel.getProperty("/timeRangeSize");
+                    // Format based on time range
+                    if (rangeSize === '1d' || rangeSize === '2d' || rangeSize === '3d') {
+                        return date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                    } else if (rangeSize === '1w' || rangeSize === '2w' || rangeSize === '1m') {
+                        return getCalendarWeek(date);
+                    } else {
+                        return date.toLocaleString('en-US', { month: 'short', day: 'numeric' });
+                    }
+                });
+
+                var extractionData = trendData.map(function(item) {
+                    return item.extractionCount || 0;
+                });
+
+                var confidenceData = trendData.map(function(item) {
+                    return (item.avgConfidence || 0) * 100; // Convert to percentage
+                });
+
+                console.log('[DEBUG] Chart labels:', labels);
+                console.log('[DEBUG] Extraction data:', extractionData);
+                console.log('[DEBUG] Confidence data:', confidenceData);
+
+                // Calculate KPIs
+                var totalExtractions = extractionData.reduce(function(a, b) { return a + b; }, 0);
+                var avgConfidence = confidenceData.length > 0
+                    ? confidenceData.reduce(function(a, b) { return a + b; }, 0) / confidenceData.length
+                    : 0;
+
+                var allMetrics = oViewModel.getProperty("/auditMetrics");
+                var avgDuration = 0;
+                if (allMetrics && allMetrics.length > 0) {
+                    var totalDuration = 0;
+                    var validDurations = 0;
+                    allMetrics.forEach(function(m) {
+                        if (m.extractionDuration) {
+                            totalDuration += m.extractionDuration;
+                            validDurations++;
+                        }
+                    });
+                    avgDuration = validDurations > 0 ? totalDuration / validDurations / 60000 : 0; // Convert to minutes
+                }
+
+                oViewModel.setProperty("/kpis", {
+                    avgProcessingTime: avgDuration.toFixed(1),
+                    avgExtractionChanges: 2.7, // Placeholder - would need to track document version changes
+                    avgAcceptanceAccuracy: avgConfidence.toFixed(1),
+                    totalExtractions: totalExtractions
+                });
+
+                usageChart.data.labels = labels;
+                usageChart.data.datasets[0].data = extractionData;
+                usageChart.data.datasets[1].data = confidenceData;
+                usageChart.update();
+                console.log('[DEBUG] Combined chart updated successfully');
+            }
+
+            // Update confidence chart with new data
+            function updateConfidenceChart(trendData) {
+                console.log('[DEBUG] updateConfidenceChart called with', trendData.length, 'data points');
+                if (!confidenceChart) {
+                    console.error('[ERROR] confidenceChart is not initialized');
+                    return;
+                }
+
+                var labels = trendData.map(function(item) {
+                    var date = new Date(item.timestamp);
+                    var rangeSize = oViewModel.getProperty("/timeRangeSize");
+                    // Format based on time range
+                    if (rangeSize === '1d' || rangeSize === '2d' || rangeSize === '3d') {
+                        return date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                    } else {
+                        return date.toLocaleString('en-US', { month: 'short', day: 'numeric' });
+                    }
+                });
+                var data = trendData.map(function(item) {
+                    return item.avgConfidence || 0;
+                });
+
+                console.log('[DEBUG] Confidence labels:', labels);
+                console.log('[DEBUG] Confidence data:', data);
+
+                confidenceChart.data.labels = labels;
+                confidenceChart.data.datasets[0].data = data;
+                confidenceChart.update();
+                console.log('[DEBUG] Confidence chart updated successfully');
+            }
+
+            // Refresh audit data from DocAI
+            function refreshAuditData() {
+                oViewModel.setProperty("/isRefreshing", true);
+                MessageToast.show("Refreshing audit data from DocAI...");
+
+                var endDate = new Date();
+                var startDate = new Date(endDate.getTime() - (30 * 24 * 60 * 60 * 1000)); // 30 days ago
+
+                // Format dates without milliseconds for CDS DateTime type
+                function formatDateTime(date) {
+                    return date.toISOString().split('.')[0] + 'Z';
+                }
+
+                fetch(getApiBasePath() + "audit/refreshAuditData", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        startDate: formatDateTime(startDate),
+                        endDate: formatDateTime(endDate)
+                    })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        oViewModel.setProperty("/isRefreshing", false);
+                        oViewModel.setProperty("/lastRefresh", new Date());
+
+                        if (data.status === "success") {
+                            MessageToast.show("Audit data refreshed: " + data.recordsProcessed + " records processed");
+                            loadClientSummary();
+                            loadAuditMetrics();
+                            loadUsageTrend();
+                        } else if (data.status === "failed" && data.errors && data.errors.length > 0) {
+                            var errorMsg = data.errors[0];
+                            if (errorMsg.includes("destination not configured")) {
+                                MessageBox.information("DocAI destination not configured for local development. Using existing cached data.", {
+                                    title: "Refresh Not Available"
+                                });
+                            } else {
+                                MessageBox.error("Refresh failed: " + errorMsg);
+                            }
+                        } else {
+                            MessageBox.warning("Refresh completed with errors. Check logs for details.");
+                        }
+                    })
+                    .catch(error => {
+                        oViewModel.setProperty("/isRefreshing", false);
+                        MessageBox.error("Failed to refresh audit data: " + error.message);
+                    });
+            }
+
+            // Load client summary
+            function loadClientSummary() {
+                fetch(getApiBasePath() + "audit/getClientSummary()", {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        var summaries = data.value || [];
+                        oViewModel.setProperty("/clientSummary", summaries);
+
+                        // Update client dropdown
+                        var clients = ["All Clients"].concat(summaries.map(function(s) { return s.clientId; }));
+                        oViewModel.setProperty("/clients", clients);
+                    })
+                    .catch(error => {
+                        console.error("Failed to load client summary:", error);
+                    });
+            }
+
+            // Load filter value lists
+            function loadFilterValueLists() {
+                // Load Mail Processing Status
+                fetch(getApiBasePath() + "audit/MailProcessingStatus", {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        var values = data.value || [];
+                        oViewModel.setProperty("/mailProcessingStatusList", values);
+                    })
+                    .catch(error => console.error("Failed to load mail processing status:", error));
+
+                // Load Responsibility Regions
+                fetch(getApiBasePath() + "audit/ResponsibilityRegion", {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        var values = data.value || [];
+                        oViewModel.setProperty("/responsibilityRegionList", values);
+                    })
+                    .catch(error => console.error("Failed to load responsibility regions:", error));
+
+                // Load Partner Profiles
+                fetch(getApiBasePath() + "audit/PartnerProfile", {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        var values = data.value || [];
+                        oViewModel.setProperty("/partnerProfileList", values);
+                    })
+                    .catch(error => console.error("Failed to load partner profiles:", error));
+
+                // Load Attachment Processing Status
+                fetch(getApiBasePath() + "audit/AttachmentProcessingStatus", {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        var values = data.value || [];
+                        oViewModel.setProperty("/attachmentProcessingStatusList", values);
+                    })
+                    .catch(error => console.error("Failed to load attachment processing status:", error));
+
+                // Load Attachment Extraction Status
+                fetch(getApiBasePath() + "audit/AttachmentExtractionStatus", {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        var values = data.value || [];
+                        oViewModel.setProperty("/attachmentExtractionStatusList", values);
+                    })
+                    .catch(error => console.error("Failed to load attachment extraction status:", error));
+
+                // Load Document Types
+                fetch(getApiBasePath() + "audit/DocumentType", {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        var values = data.value || [];
+                        oViewModel.setProperty("/documentTypeList", values);
+                    })
+                    .catch(error => console.error("Failed to load document types:", error));
+
+                // Load Basic Routing Status
+                fetch(getApiBasePath() + "audit/BasicRoutingStatus", {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        var values = data.value || [];
+                        oViewModel.setProperty("/basicRoutingStatusList", values);
+                    })
+                    .catch(error => console.error("Failed to load basic routing status:", error));
+            }
+
+            // Load schemas for selected client
+            function loadSchemasByClient(clientId) {
+                if (!clientId || clientId === "All Clients") {
+                    oViewModel.setProperty("/schemas", ["All Schemas"]);
+                    oViewModel.setProperty("/selectedSchema", "All Schemas");
+                    return;
+                }
+
+                fetch(getApiBasePath() + "audit/getSchemasByClient(clientId='" + clientId + "')", {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        var schemas = data.value || [];
+                        var schemaList = ["All Schemas"].concat(schemas.map(function(s) {
+                            return {
+                                key: s.schemaVersionId,
+                                text: s.schemaName + " v" + s.schemaVersion
+                            };
+                        }));
+                        oViewModel.setProperty("/schemas", schemaList);
+                    })
+                    .catch(error => {
+                        console.error("Failed to load schemas:", error);
+                    });
+            }
+
+            // Load usage trend
+            function loadUsageTrend() {
+                var clientId = oViewModel.getProperty("/selectedClient");
+                var selectedSchema = oViewModel.getProperty("/selectedSchema");
+                var rangeSize = oViewModel.getProperty("/timeRangeSize");
+                var timeOffset = oViewModel.getProperty("/timeOffset");
+
+                console.log('[DEBUG] loadUsageTrend - clientId:', clientId, 'schema:', selectedSchema, 'rangeSize:', rangeSize, 'offset:', timeOffset);
+
+                // Calculate date range
+                var endDate = new Date();
+                endDate.setDate(endDate.getDate() - timeOffset);
+                endDate.setHours(23, 59, 59, 999);
+
+                var startDate = new Date(endDate);
+
+                // Convert range size to days and bucket size
+                var timeRangeDays = 1;
+                var bucketSize = "hour";
+
+                switch(rangeSize) {
+                    case "1d": timeRangeDays = 1; bucketSize = "hour"; break;
+                    case "2d": timeRangeDays = 2; bucketSize = "hour"; break;
+                    case "3d": timeRangeDays = 3; bucketSize = "hour"; break;
+                    case "1w": timeRangeDays = 7; bucketSize = "day"; break;
+                    case "2w": timeRangeDays = 14; bucketSize = "day"; break;
+                    case "1m": timeRangeDays = 30; bucketSize = "day"; break;
+                }
+
+                startDate.setDate(startDate.getDate() - timeRangeDays);
+                startDate.setHours(0, 0, 0, 0);
+
+                var clientFilter = (clientId === "All Clients") ? "" : clientId;
+
+                // Extract schema version ID from selected schema
+                var schemaVersionId = "";
+                if (selectedSchema !== "All Schemas") {
+                    var schemas = oViewModel.getProperty("/schemas");
+                    var selectedSchemaObj = schemas.find(function(s) {
+                        return typeof s === 'object' && s.text === selectedSchema;
+                    });
+                    if (selectedSchemaObj) {
+                        schemaVersionId = selectedSchemaObj.key;
+                    }
+                }
+
+                var params = "clientId='" + clientFilter + "',schemaVersionId='" + schemaVersionId + "',timeRange=" + Math.ceil(timeRangeDays) + ",bucketSize='" + bucketSize + "'";
+                var url = getApiBasePath() + "audit/getUsageTrend(" + params + ")";
+
+                console.log('[DEBUG] Fetching from URL:', url);
+                console.log('[DEBUG] Date range:', startDate.toISOString(), 'to', endDate.toISOString());
+
+                fetch(url, {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" }
+                })
+                    .then(response => {
+                        console.log('[DEBUG] Response status:', response.status);
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log('[DEBUG] Response data:', data);
+                        var trend = data.value || [];
+                        console.log('[DEBUG] Trend data points:', trend.length);
+                        oViewModel.setProperty("/usageTrend", trend);
+                        oViewModel.setProperty("/confidenceTrend", trend);
+                        updateUsageChart(trend);
+                    })
+                    .catch(error => {
+                        console.error("Failed to load usage trend:", error);
+                    });
+            }
+
+            // Load audit metrics
+            function loadAuditMetrics() {
+                var clientId = oViewModel.getProperty("/selectedClient");
+                var selectedSchema = oViewModel.getProperty("/selectedSchema");
+                var url = getApiBasePath() + "audit/AuditMetrics?$orderby=documentCreatedAt desc&$top=50";
+
+                var filters = [];
+                if (clientId && clientId !== "All Clients") {
+                    filters.push("clientId eq '" + clientId + "'");
+                }
+
+                // Extract schema version ID if specific schema selected
+                if (selectedSchema !== "All Schemas") {
+                    var schemas = oViewModel.getProperty("/schemas");
+                    var selectedSchemaObj = schemas.find(function(s) {
+                        return typeof s === 'object' && s.text === selectedSchema;
+                    });
+                    if (selectedSchemaObj) {
+                        filters.push("schemaVersionId eq '" + selectedSchemaObj.key + "'");
+                    }
+                }
+
+                if (filters.length > 0) {
+                    url += "&$filter=" + filters.join(" and ");
+                }
+
+                fetch(url, {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        var metrics = data.value || [];
+                        oViewModel.setProperty("/auditMetrics", metrics);
+                    })
+                    .catch(error => {
+                        console.error("Failed to load audit metrics:", error);
+                    });
+            }
+
+            // Export metrics to CSV
+            function exportToCSV() {
+                var metrics = oViewModel.getProperty("/auditMetrics");
+                if (!metrics || metrics.length === 0) {
+                    MessageToast.show("No data to export");
+                    return;
+                }
+
+                var headers = ["Document ID", "Client ID", "Schema Name", "Status", "Doc Confidence %",
+                              "Field Confidence %", "Duration (s)", "Created At", "Finished At"];
+                var rows = [headers.join(",")];
+
+                metrics.forEach(function(m) {
+                    var row = [
+                        m.docaiDocumentId || "",
+                        m.clientId || "",
+                        m.schemaName || "",
+                        m.status || "",
+                        formatConfidence(m.documentConfidence),
+                        formatConfidence(m.avgFieldConfidence),
+                        formatDuration(m.extractionDuration),
+                        m.documentCreatedAt ? new Date(m.documentCreatedAt).toISOString() : "",
+                        m.documentFinishedAt ? new Date(m.documentFinishedAt).toISOString() : ""
+                    ];
+                    rows.push(row.join(","));
+                });
+
+                var csv = rows.join("\n");
+                var blob = new Blob([csv], { type: "text/csv" });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement("a");
+                a.href = url;
+                a.download = "audit_metrics_" + new Date().toISOString().split('T')[0] + ".csv";
+                a.click();
+                URL.revokeObjectURL(url);
+
+                MessageToast.show("Exported " + metrics.length + " records");
+            }
+
+            // ========== UI COMPONENTS ==========
+
+            // KPI Badges (inline pill format to match target screenshot)
+            var oKPIBadge1 = new HBox({
+                alignItems: "Center",
+                items: [
+                    new Text({
+                        text: {
+                            path: "view>/kpis/avgProcessingTime",
+                            formatter: function(val) { return "Avg. Processing: " + val + " Min"; }
+                        }
+                    }).addStyleClass("sapUiSmallMarginEnd")
+                ]
+            }).addStyleClass("sapUiSmallMarginEnd");
+
+            var oKPIBadge2 = new HBox({
+                alignItems: "Center",
+                items: [
+                    new Text({
+                        text: {
+                            path: "view>/kpis/avgExtractionChanges",
+                            formatter: function(val) { return "Avg. Extraction Changes: " + val; }
+                        }
+                    }).addStyleClass("sapUiSmallMarginEnd")
+                ]
+            }).addStyleClass("sapUiSmallMarginEnd");
+
+            var oKPIBadge3 = new HBox({
+                alignItems: "Center",
+                items: [
+                    new Text({
+                        text: {
+                            path: "view>/kpis/avgAcceptanceAccuracy",
+                            formatter: function(val) { return "Avg. Acceptance Accuracy: " + val + " %"; }
+                        }
+                    })
+                ]
+            });
+
+            // Refresh Controls Panel
+            var oLastRefreshText = new Text({
+                text: {
+                    path: "view>/lastRefresh",
+                    formatter: function(timestamp) {
+                        if (!timestamp) return "Never refreshed";
+                        return formatTimestamp(timestamp) + " (" + formatRelativeTime(timestamp) + ")";
+                    }
+                }
+            });
+
+            var oRefreshButton = new Button({
+                text: "Refresh Now",
+                icon: "sap-icon://refresh",
+                type: "Emphasized",
+                enabled: {
+                    path: "view>/isRefreshing",
+                    formatter: function(isRefreshing) { return !isRefreshing; }
+                },
+                press: refreshAuditData
+            });
+
+            // Filter Bar Components
+            var oFilterSearchField = new SearchField({
+                width: "100%",
+                placeholder: "Search",
+                value: "{view>/filters/search}"
+            });
+
+            var oMailIdInput = new Input({
+                width: "150px",
+                placeholder: "Mail ID",
+                value: "{view>/filters/mailId}",
+                showValueHelp: true
+            });
+
+            var oMailProcessingStatusInput = new Input({
+                width: "180px",
+                placeholder: "Mail Processing Status",
+                value: "{view>/filters/mailProcessingStatus}",
+                showValueHelp: true
+            });
+
+            var oResponsibilityRegionSelect = new Select({
+                width: "180px",
+                selectedKey: "{view>/filters/responsibilityRegion}",
+                items: {
+                    path: "view>/responsibilityRegionList",
+                    template: new Item({
+                        key: "{view>code}",
+                        text: "{view>name}"
+                    })
+                }
+            });
+            // Add default "Not Selected" item
+            oResponsibilityRegionSelect.insertItem(new Item({ key: "", text: "Responsibility Region" }), 0);
+
+            var oPartnerProfileInput = new Input({
+                width: "150px",
+                placeholder: "Partner Profile",
+                value: "{view>/filters/partnerProfile}",
+                showValueHelp: true
+            });
+
+            var oCompanySysCommInput = new Input({
+                width: "220px",
+                placeholder: "Company System Communication",
+                value: "{view>/filters/companySystemCommunication}"
+            });
+
+            var oDocNumberCustomerInput = new Input({
+                width: "200px",
+                placeholder: "Document Number (Customer)",
+                value: "{view>/filters/documentNumberCustomer}",
+                showValueHelp: true
+            });
+
+            var oSenderEmailInput = new Input({
+                width: "180px",
+                placeholder: "Sender Email Address",
+                value: "{view>/filters/senderEmailAddress}",
+                showValueHelp: true
+            });
+
+            var oReceivedAtInput = new Input({
+                width: "150px",
+                placeholder: "Received At",
+                value: "{view>/filters/receivedAt}",
+                showValueHelp: true
+            });
+
+            var oAttachmentProcStatusSelect = new Select({
+                width: "200px",
+                selectedKey: "{view>/filters/attachmentProcessingStatus}",
+                items: {
+                    path: "view>/attachmentProcessingStatusList",
+                    template: new Item({
+                        key: "{view>code}",
+                        text: "{view>name}"
+                    })
+                }
+            });
+            oAttachmentProcStatusSelect.insertItem(new Item({ key: "Not Selected", text: "Attachment Processing Status" }), 0);
+
+            var oAttachmentExtStatusSelect = new Select({
+                width: "200px",
+                selectedKey: "{view>/filters/attachmentExtractionStatus}",
+                items: {
+                    path: "view>/attachmentExtractionStatusList",
+                    template: new Item({
+                        key: "{view>code}",
+                        text: "{view>name}"
+                    })
+                }
+            });
+            oAttachmentExtStatusSelect.insertItem(new Item({ key: "Not Selected", text: "Attachment Extraction Status" }), 0);
+
+            var oDocumentTypeSelect = new Select({
+                width: "150px",
+                selectedKey: "{view>/filters/documentType}",
+                items: {
+                    path: "view>/documentTypeList",
+                    template: new Item({
+                        key: "{view>code}",
+                        text: "{view>name}"
+                    })
+                }
+            });
+            oDocumentTypeSelect.insertItem(new Item({ key: "Not Selected", text: "Document Type" }), 0);
+
+            var oPartnerSenderIdInput = new Input({
+                width: "220px",
+                placeholder: "Partner Sender Identifier System",
+                value: "{view>/filters/partnerSenderIdentifierSystem}",
+                showValueHelp: true
+            });
+
+            var oCompanyReceiverIdInput = new Input({
+                width: "200px",
+                placeholder: "Company Receiver Identifier",
+                value: "{view>/filters/companyReceiverIdentifier}",
+                showValueHelp: true
+            });
+
+            var oAutoProcessedSelect = new Select({
+                width: "150px",
+                selectedKey: "{view>/filters/autoProcessed}",
+                items: [
+                    new Item({ key: "Not Selected", text: "Auto Processed" }),
+                    new Item({ key: "Yes", text: "Yes" }),
+                    new Item({ key: "No", text: "No" })
+                ]
+            });
+
+            var oBasicRoutingStatusInput = new Input({
+                width: "180px",
+                placeholder: "Basic Routing Status",
+                value: "{view>/filters/basicRoutingStatus}",
+                showValueHelp: true
+            });
+
+            var oGoButton = new Button({
+                text: "Go",
+                type: "Emphasized",
+                press: function() {
+                    MessageToast.show("Applying filters...");
+                    loadAuditMetrics();
+                }
+            });
+
+            var oAdaptFiltersLink = new Link({
+                text: "Adapt Filters",
+                press: function() {
+                    MessageToast.show("Filter adaptation not yet implemented");
+                }
+            });
+
+            // Filter Bar Panel
+            var oFilterBar = new Panel({
+                expandable: false,
+                content: new VBox({
+                    items: [
+                        // Top row of filters
+                        new HBox({
+                            wrap: "Wrap",
+                            alignItems: "Center",
+                            items: [
+                                oFilterSearchField.setLayoutData(new FlexItemData({ growFactor: 1 })),
+                                oMailIdInput.addStyleClass("sapUiTinyMarginBegin"),
+                                oMailProcessingStatusInput.addStyleClass("sapUiTinyMarginBegin"),
+                                oResponsibilityRegionSelect.addStyleClass("sapUiTinyMarginBegin"),
+                                oPartnerProfileInput.addStyleClass("sapUiTinyMarginBegin"),
+                                oCompanySysCommInput.addStyleClass("sapUiTinyMarginBegin")
+                            ]
+                        }).addStyleClass("sapUiTinyMarginBottom"),
+                        new HBox({
+                            wrap: "Wrap",
+                            alignItems: "Center",
+                            items: [
+                                oDocNumberCustomerInput,
+                                oSenderEmailInput.addStyleClass("sapUiTinyMarginBegin"),
+                                oReceivedAtInput.addStyleClass("sapUiTinyMarginBegin"),
+                                oAttachmentProcStatusSelect.addStyleClass("sapUiTinyMarginBegin"),
+                                oAttachmentExtStatusSelect.addStyleClass("sapUiTinyMarginBegin"),
+                                oDocumentTypeSelect.addStyleClass("sapUiTinyMarginBegin"),
+                                oPartnerSenderIdInput.addStyleClass("sapUiTinyMarginBegin")
+                            ]
+                        }).addStyleClass("sapUiTinyMarginBottom"),
+                        // Bottom row of filters
+                        new HBox({
+                            wrap: "Wrap",
+                            justifyContent: "SpaceBetween",
+                            alignItems: "Center",
+                            items: [
+                                new HBox({
+                                    wrap: "Wrap",
+                                    alignItems: "Center",
+                                    items: [
+                                        oCompanyReceiverIdInput,
+                                        oAutoProcessedSelect.addStyleClass("sapUiTinyMarginBegin"),
+                                        oBasicRoutingStatusInput.addStyleClass("sapUiTinyMarginBegin")
+                                    ]
+                                }),
+                                new HBox({
+                                    alignItems: "Center",
+                                    items: [
+                                        oGoButton.addStyleClass("sapUiSmallMarginBegin"),
+                                        oAdaptFiltersLink.addStyleClass("sapUiSmallMarginBegin")
+                                    ]
+                                })
+                            ]
+                        })
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            var oRefreshPanel = new Panel({
+                headerText: "Refresh Controls",
+                expandable: false,
+                content: new VBox({
+                    items: [
+                        new HBox({
+                            justifyContent: "SpaceBetween",
+                            alignItems: "Center",
+                            items: [
+                                new VBox({
+                                    items: [
+                                        new Label({ text: "Last Refresh:" }),
+                                        oLastRefreshText.addStyleClass("sapUiTinyMarginTop")
+                                    ]
+                                }),
+                                oRefreshButton
+                            ]
+                        })
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Client Summary Table
+            var oClientSummaryTable = new Table({
+                width: "100%",
+                columns: [
+                    new Column({ header: new Label({ text: "Client ID" }), width: "20%" }),
+                    new Column({ header: new Label({ text: "Total Schemas" }), width: "15%" }),
+                    new Column({ header: new Label({ text: "Total Extractions" }), width: "15%" }),
+                    new Column({ header: new Label({ text: "Avg Confidence" }), width: "15%" }),
+                    new Column({ header: new Label({ text: "Avg Duration" }), width: "15%" }),
+                    new Column({ header: new Label({ text: "Last Extraction" }), width: "20%" })
+                ],
+                items: {
+                    path: "view>/clientSummary",
+                    template: new ColumnListItem({
+                        cells: [
+                            new Text({ text: "{view>clientId}" }),
+                            new Text({ text: "{view>totalSchemas}" }),
+                            new Text({ text: "{view>totalExtractions}" }),
+                            new ObjectStatus({
+                                text: {
+                                    path: "view>avgConfidence",
+                                    formatter: formatConfidence
+                                },
+                                state: {
+                                    path: "view>avgConfidence",
+                                    formatter: getConfidenceState
+                                }
+                            }),
+                            new Text({
+                                text: {
+                                    path: "view>avgDuration",
+                                    formatter: function(ms) {
+                                        return ms ? formatDuration(ms) + "s" : "-";
+                                    }
+                                }
+                            }),
+                            new Text({
+                                text: {
+                                    path: "view>lastExtractionAt",
+                                    formatter: formatTimestamp
+                                }
+                            })
+                        ]
+                    })
+                }
+            });
+
+            var oClientSummaryPanel = new Panel({
+                headerText: "Schema & Client Overview",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [oClientSummaryTable]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Usage Trend Chart Panel
+            var oClientFilter = new ComboBox({
+                width: "200px",
+                selectedKey: "{view>/selectedClient}",
+                items: {
+                    path: "view>/clients",
+                    template: new Item({ key: "{view>}", text: "{view>}" })
+                },
+                selectionChange: function(oEvent) {
+                    var selectedClient = oEvent.getParameter("selectedItem").getKey();
+                    oViewModel.setProperty("/selectedClient", selectedClient);
+                    loadSchemasByClient(selectedClient);
+                    loadUsageTrend();
+                    loadAuditMetrics();
+                }
+            });
+
+            var oSchemaFilter = new ComboBox({
+                width: "250px",
+                selectedKey: "{view>/selectedSchema}",
+                items: {
+                    path: "view>/schemas",
+                    template: new Item({
+                        key: {
+                            path: "view>",
+                            formatter: function(item) {
+                                return typeof item === 'object' ? item.text : item;
+                            }
+                        },
+                        text: {
+                            path: "view>",
+                            formatter: function(item) {
+                                return typeof item === 'object' ? item.text : item;
+                            }
+                        }
+                    })
+                },
+                selectionChange: function(oEvent) {
+                    var selectedKey = oEvent.getParameter("selectedItem").getKey();
+                    oViewModel.setProperty("/selectedSchema", selectedKey);
+                    loadUsageTrend();
+                    loadAuditMetrics();
+                }
+            });
+
+            var oTimeRangeButtons = new SegmentedButton({
+                selectedKey: "{view>/timeRangeSize}",
+                selectionChange: function() {
+                    formatDateRangeLabel();
+                    loadUsageTrend();
+                },
+                items: [
+                    new SegmentedButtonItem({ key: "1d", text: "1 Day" }),
+                    new SegmentedButtonItem({ key: "2d", text: "2 Days" }),
+                    new SegmentedButtonItem({ key: "3d", text: "3 Days" }),
+                    new SegmentedButtonItem({ key: "1w", text: "1 Week" }),
+                    new SegmentedButtonItem({ key: "2w", text: "2 Weeks" }),
+                    new SegmentedButtonItem({ key: "1m", text: "1 Month" })
+                ]
+            });
+
+            var oBackButton = new Button({
+                icon: "sap-icon://navigation-left-arrow",
+                tooltip: "Go back in time",
+                press: function() {
+                    navigateTime(1);  // Move backward (increase offset)
+                }
+            });
+
+            var oForwardButton = new Button({
+                icon: "sap-icon://navigation-right-arrow",
+                tooltip: "Go forward in time",
+                enabled: {
+                    path: "view>/timeOffset",
+                    formatter: function(offset) { return offset > 0; }
+                },
+                press: function() {
+                    navigateTime(-1);  // Move forward (decrease offset)
+                }
+            });
+
+            var oTodayButton = new Button({
+                text: "Today",
+                icon: "sap-icon://history",
+                tooltip: "Jump to today",
+                enabled: {
+                    path: "view>/timeOffset",
+                    formatter: function(offset) { return offset > 0; }
+                },
+                press: function() {
+                    resetToToday();
+                }
+            });
+
+            var oDateRangeLabel = new Text({
+                text: "{view>/dateRangeLabel}"
+            }).addStyleClass("sapUiSmallMarginBegin sapUiSmallMarginEnd");
+
+            var oUsageChartCanvas = new HTML({
+                content: '<canvas id="usageChart" style="width:100%; height:400px;"></canvas>'
+            });
+
+            var oConfidenceChartCanvas = new HTML({
+                content: '<!-- No longer needed - using combined chart -->'
+            });
+
+            // View controls
+            var oDetailsButton = new Button({
+                text: "Details",
+                press: function() {
+                    MessageToast.show("Details view");
+                }
+            });
+
+            var oViewBySelect = new Select({
+                width: "120px",
+                items: [
+                    new Item({ key: "week", text: "View By" }),
+                    new Item({ key: "day", text: "Day" }),
+                    new Item({ key: "month", text: "Month" })
+                ]
+            });
+
+            var oUsageTrendPanel = new Panel({
+                headerText: "Received Year Week",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [
+                        new HBox({
+                            justifyContent: "SpaceBetween",
+                            wrap: "Wrap",
+                            items: [
+                                new HBox({
+                                    alignItems: "Center",
+                                    items: [
+                                        new Label({ text: "Client:" }).addStyleClass("sapUiTinyMarginEnd"),
+                                        oClientFilter.addStyleClass("sapUiTinyMarginEnd"),
+                                        new Label({ text: "Schema:" }).addStyleClass("sapUiTinyMarginEnd sapUiTinyMarginBegin"),
+                                        oSchemaFilter
+                                    ]
+                                })
+                            ]
+                        }).addStyleClass("sapUiSmallMarginBottom"),
+                        new HBox({
+                            justifyContent: "SpaceBetween",
+                            alignItems: "Center",
+                            items: [
+                                new HBox({
+                                    alignItems: "Center",
+                                    items: [
+                                        oBackButton,
+                                        oDateRangeLabel,
+                                        oForwardButton,
+                                        oTodayButton.addStyleClass("sapUiSmallMarginBegin")
+                                    ]
+                                }),
+                                new HBox({
+                                    alignItems: "Center",
+                                    items: [
+                                        oDetailsButton.addStyleClass("sapUiTinyMarginEnd"),
+                                        oViewBySelect.addStyleClass("sapUiTinyMarginEnd"),
+                                        new Button({
+                                            icon: "sap-icon://table-view",
+                                            tooltip: "Table View",
+                                            press: function() {
+                                                MessageToast.show("Table view");
+                                            }
+                                        }).addStyleClass("sapUiTinyMarginEnd"),
+                                        new Button({
+                                            icon: "sap-icon://bar-chart",
+                                            tooltip: "Chart View",
+                                            type: "Emphasized"
+                                        })
+                                    ]
+                                })
+                            ]
+                        }).addStyleClass("sapUiSmallMarginBottom"),
+                        oUsageChartCanvas
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            var oConfidenceTrendPanel = new Panel({
+                headerText: "Confidence Over Time",
+                expandable: true,
+                expanded: false,
+                visible: false,
+                content: new VBox({
+                    items: [
+                        oConfidenceChartCanvas
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Extraction Metrics Table
+            var oExportButton = new Button({
+                text: "Export to CSV",
+                icon: "sap-icon://download",
+                press: exportToCSV
+            });
+
+            var oMetricsTable = new Table({
+                width: "100%",
+                mode: "None",
+                columns: [
+                    new Column({ header: new Label({ text: "Document ID" }), width: "15%" }),
+                    new Column({ header: new Label({ text: "Client ID" }), width: "10%" }),
+                    new Column({ header: new Label({ text: "Schema Name" }), width: "12%" }),
+                    new Column({ header: new Label({ text: "Status" }), width: "10%" }),
+                    new Column({ header: new Label({ text: "Doc Confidence" }), width: "10%" }),
+                    new Column({ header: new Label({ text: "Field Confidence" }), width: "10%" }),
+                    new Column({ header: new Label({ text: "Duration (s)" }), width: "8%" }),
+                    new Column({ header: new Label({ text: "Created At" }), width: "12%" }),
+                    new Column({ header: new Label({ text: "Finished At" }), width: "13%" })
+                ],
+                items: {
+                    path: "view>/auditMetrics",
+                    template: new ColumnListItem({
+                        cells: [
+                            new Link({
+                                text: {
+                                    path: "view>docaiDocumentId",
+                                    formatter: function(docId) {
+                                        return docId ? docId.substring(0, 12) + "..." : "-";
+                                    }
+                                },
+                                href: {
+                                    path: "view>docaiDocumentId",
+                                    formatter: getDocAILink
+                                },
+                                target: "_blank",
+                                visible: {
+                                    path: "view>docaiDocumentId",
+                                    formatter: function(docId) { return !!docId; }
+                                }
+                            }),
+                            new Text({ text: "{view>clientId}" }),
+                            new Text({ text: "{view>schemaName}" }),
+                            new ObjectStatus({
+                                text: "{view>status}",
+                                state: {
+                                    path: "view>status",
+                                    formatter: getStatusState
+                                }
+                            }),
+                            new ObjectStatus({
+                                text: {
+                                    path: "view>documentConfidence",
+                                    formatter: formatConfidence
+                                },
+                                state: {
+                                    path: "view>documentConfidence",
+                                    formatter: getConfidenceState
+                                }
+                            }),
+                            new ObjectStatus({
+                                text: {
+                                    path: "view>avgFieldConfidence",
+                                    formatter: formatConfidence
+                                },
+                                state: {
+                                    path: "view>avgFieldConfidence",
+                                    formatter: getConfidenceState
+                                }
+                            }),
+                            new Text({
+                                text: {
+                                    path: "view>extractionDuration",
+                                    formatter: formatDuration
+                                }
+                            }),
+                            new Text({
+                                text: {
+                                    path: "view>documentCreatedAt",
+                                    formatter: formatTimestamp
+                                }
+                            }),
+                            new Text({
+                                text: {
+                                    path: "view>documentFinishedAt",
+                                    formatter: formatTimestamp
+                                }
+                            })
+                        ]
+                    })
+                }
+            });
+
+            var oMetricsPanel = new Panel({
+                headerText: "Extraction Metrics (Top 50)",
+                expandable: true,
+                expanded: true,
+                content: new VBox({
+                    items: [
+                        oExportButton.addStyleClass("sapUiSmallMarginBottom"),
+                        oMetricsTable
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Main Content
+            var oMainContent = new VBox({
+                width: "100%",
+                items: [
+                    new HBox({
+                        width: "100%",
+                        justifyContent: "SpaceBetween",
+                        alignItems: "Center",
+                        items: [
+                            new HBox({
+                                alignItems: "Center",
+                                items: [
+                                    new Title({
+                                        text: "Standard:",
+                                        level: "H3"
+                                    }).addStyleClass("sapUiTinyMarginEnd"),
+                                    new Button({
+                                        icon: "sap-icon://navigation-down-arrow",
+                                        type: "Transparent",
+                                        press: function() {
+                                            MessageToast.show("Standard selection");
+                                        }
+                                    })
+                                ]
+                            }),
+                            new HBox({
+                                items: [
+                                    new Button({
+                                        text: "Extraction Changes",
+                                        icon: "sap-icon://tree",
+                                        press: function() {
+                                            window.location.href = "./extraction-changes.html";
+                                        }
+                                    }).addStyleClass("sapUiTinyMarginEnd"),
+                                    new Button({
+                                        text: "Back to Home",
+                                        icon: "sap-icon://home",
+                                        press: function() {
+                                            window.location.href = "./index.html";
+                                        }
+                                    })
+                                ]
+                            })
+                        ]
+                    }).addStyleClass("sapUiMediumMarginTop sapUiTinyMarginBottom"),
+                    new HBox({
+                        wrap: "Wrap",
+                        alignItems: "Center",
+                        items: [
+                            oKPIBadge1,
+                            new Text({ text: " | " }).addStyleClass("sapUiSmallMarginEnd"),
+                            oKPIBadge2,
+                            new Text({ text: " | " }).addStyleClass("sapUiSmallMarginEnd"),
+                            oKPIBadge3
+                        ]
+                    }).addStyleClass("sapUiSmallMarginBottom"),
+                    oFilterBar,
+                    oUsageTrendPanel,
+                    oRefreshPanel,
+                    oClientSummaryPanel,
+                    oConfidenceTrendPanel,
+                    oMetricsPanel
+                ],
+                alignItems: "Stretch"
+            }).addStyleClass("sapUiContentPadding");
+
+            // Create Page
+            var oPage = new Page({
+                title: "Mai2Edi Monitor - Standard",
+                showHeader: true,
+                showNavButton: true,
+                navButtonPress: function() {
+                    window.location.href = "./index.html";
+                },
+                content: [
+                    new VBox({
+                        width: "100%",
+                        items: [oMainContent],
+                        alignItems: "Center"
+                    })
+                ]
+            });
+
+            // Create App
+            var oApp = new App({
+                pages: [oPage]
+            });
+
+            oApp.placeAt("content");
+            oApp.setModel(oViewModel, "view");
+
+            // Initialize charts after DOM is ready
+            console.log('[DEBUG] Setting timeout for chart initialization');
+            setTimeout(function() {
+                console.log('[DEBUG] Timeout fired, initializing charts');
+                initUsageChart();
+                initConfidenceChart();
+
+                console.log('[DEBUG] Loading initial data');
+                // Set initial date range label
+                formatDateRangeLabel();
+
+                // Load initial data
+                loadClientSummary();
+                loadFilterValueLists();
+                loadAuditMetrics();
+                loadUsageTrend();
+            }, 1000);
+
+        }, function(err) {
+            console.error("UI5 module loading failed:", err);
+            document.body.innerHTML = '<div style="padding:20px;color:red;">Error loading UI5 framework. Please check console and refresh.</div>';
+        });
+    </script>
+</head>
+<body class="sapUiBody sapUiSizeCompact">
+    <div id="content"></div>
+</body>
+</html>

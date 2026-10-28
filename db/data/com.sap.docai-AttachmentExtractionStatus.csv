@@ -1,0 +1,5 @@
+code;name;description
+EXTRACTED;Extracted;Data extracted successfully
+FAILED;Failed;Extraction failed
+PENDING;Pending;Extraction pending
+IN_PROGRESS;In Progress;Extraction in progress

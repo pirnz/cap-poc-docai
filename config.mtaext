@@ -1,0 +1,8 @@
+_schema-version: 3.3.0
+ID: cap-poc-docai-config
+extends: cap-poc-docai
+
+modules:
+  - name: cap-poc-docai-srv
+    properties:
+      DOCAI_UI_URL: https://docai-workshop.eu10.doc.cloud.sap/workspace

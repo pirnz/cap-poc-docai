@@ -88,17 +88,27 @@ ProxyType: Internet
 
 ### 3. Configure Environment Variables
 
-#### Update `mta.yaml` for Deployment
+#### Create MTA Extension File
 
-The `mta.yaml` file contains one environment variable for the deployed application. Configure before deployment:
+Create a file named `config.mtaext` (or use any name you prefer) to configure environment variables for your deployment:
 
-**DocAI UI URL** (line 20 in `mta.yaml`):
 ```yaml
-properties:
-  DOCAI_UI_URL: https://<your-docai-instance>.<region>.doc.cloud.sap/workspace
+_schema-version: 3.3.0
+ID: cap-poc-docai-config
+extends: cap-poc-docai
+
+modules:
+  - name: cap-poc-docai-srv
+    properties:
+      DOCAI_UI_URL: https://<your-docai-instance>.<region>.doc.cloud.sap/workspace
 ```
 
-Update the URL with your SAP Document AI workspace endpoint (the same URL you use to access the UI). This URL is used by the monitoring and validation UI to create deep links to DocAI workspace.
+**DocAI UI URL**: Update the URL with your SAP Document AI workspace endpoint (the same URL you use to access the UI). This URL is used by the monitoring and validation UI to create deep links to DocAI workspace.
+
+**Why use an extension file?**
+- Keeps environment-specific configuration separate from the base `mta.yaml`
+- Allows different configurations for different environments (dev, test, prod)
+- Prevents accidentally committing sensitive or environment-specific values to version control
 
 ### 4. Build and Deploy
 
@@ -117,11 +127,13 @@ This creates a deployable `.mtar` file in the `mta_archives/` folder.
 cf api https://api.cf.<region>.hana.ondemand.com
 cf login --sso
 
-# Deploy the application
-cf deploy mta_archives/cap-poc-docai_1.0.0.mtar
+# Deploy the application with the extension file
+cf deploy mta_archives/cap-poc-docai_1.0.0.mtar -e config.mtaext
 ```
 
 Replace `<region>` with your Cloud Foundry region (e.g., `eu10`, `us10`).
+
+**Note**: The `-e config.mtaext` flag applies your environment-specific configuration during deployment.
 
 ### 5. Configure outbound channels in SAP Document AI
 

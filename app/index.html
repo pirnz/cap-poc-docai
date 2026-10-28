@@ -73,6 +73,36 @@
                         color: "#0a6ed1"
                     })
                 })
+            }).addStyleClass("sapUiTinyMarginEnd");
+
+            var oAuditTile = new GenericTile({
+                header: "Audit Dashboard",
+                subheader: "Metrics and performance analytics",
+                press: function() {
+                    navigateTo("./audit.html");
+                },
+                tileContent: new TileContent({
+                    content: new Icon({
+                        src: "sap-icon://line-chart",
+                        size: "4rem",
+                        color: "#0a6ed1"
+                    })
+                })
+            }).addStyleClass("sapUiTinyMarginEnd");
+
+            var oExtractionChangesTile = new GenericTile({
+                header: "Extraction Changes",
+                subheader: "Field-level change analytics",
+                press: function() {
+                    navigateTo("./extraction-changes.html");
+                },
+                tileContent: new TileContent({
+                    content: new Icon({
+                        src: "sap-icon://tree",
+                        size: "4rem",
+                        color: "#0a6ed1"
+                    })
+                })
             });
 
             // System information panel
@@ -207,14 +237,23 @@
                         width: "100%",
                         justifyContent: "Center",
                         alignItems: "Stretch",
+                        wrap: "Wrap",
                         items: [
                             oIngestionTile.setLayoutData(new FlexItemData({
-                                minWidth: "300px",
-                                maxWidth: "400px"
+                                minWidth: "280px",
+                                maxWidth: "350px"
                             })),
                             oMonitoringTile.setLayoutData(new FlexItemData({
-                                minWidth: "300px",
-                                maxWidth: "400px"
+                                minWidth: "280px",
+                                maxWidth: "350px"
+                            })),
+                            oAuditTile.setLayoutData(new FlexItemData({
+                                minWidth: "280px",
+                                maxWidth: "350px"
+                            })),
+                            oExtractionChangesTile.setLayoutData(new FlexItemData({
+                                minWidth: "280px",
+                                maxWidth: "350px"
                             }))
                         ]
                     }).addStyleClass("sapUiLargeMarginTop"),

@@ -1,0 +1,5 @@
+code;name;description
+PROCESSING;Processing;Attachment is being processed
+COMPLETED;Completed;Attachment processing completed
+FAILED;Failed;Attachment processing failed
+PENDING;Pending;Attachment is pending processing

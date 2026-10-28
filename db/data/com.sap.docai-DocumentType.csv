@@ -1,0 +1,5 @@
+code;name;description
+INVOICE;Invoice;Invoice document
+PURCHASE_ORDER;Purchase Order;Purchase Order document
+DELIVERY_NOTE;Delivery Note;Delivery Note document
+CREDIT_MEMO;Credit Memo;Credit Memo document

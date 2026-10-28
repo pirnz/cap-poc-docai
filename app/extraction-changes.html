@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Extraction Changes Analytics - DocAI</title>
+    <script
+        id="sap-ui-bootstrap"
+        src="https://ui5.sap.com/1.148.10/resources/sap-ui-core.js"
+        data-sap-ui-theme="sap_horizon"
+        data-sap-ui-libs="sap.m,sap.ui.core,sap.ui.table"
+        data-sap-ui-async="true"
+        data-sap-ui-compatVersion="edge"
+        data-sap-ui-xx-waitForTheme="true"
+    ></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        .treemap-container {
+            width: 100%;
+            height: 500px;
+            overflow: hidden;
+        }
+        .treemap-cell {
+            stroke: #fff;
+            stroke-width: 1px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .treemap-cell:hover {
+            opacity: 0.8;
+        }
+        .treemap-text {
+            font-size: 11px;
+            font-family: "72", "Arial", sans-serif;
+            fill: white;
+            pointer-events: none;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+        }
+        .treemap-legend {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+        .legend-gradient {
+            width: 200px;
+            height: 20px;
+            background: linear-gradient(to right, #e3f2fd, #1565c0);
+            border: 1px solid #ccc;
+        }
+        .filter-bar {
+            background-color: #f5f5f5;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+        }
+    </style>
+    <script>
+        sap.ui.require([
+            "sap/m/App",
+            "sap/m/Page",
+            "sap/m/VBox",
+            "sap/m/HBox",
+            "sap/m/Title",
+            "sap/m/Text",
+            "sap/m/Button",
+            "sap/m/MessageToast",
+            "sap/m/Label",
+            "sap/ui/model/json/JSONModel",
+            "sap/m/Panel",
+            "sap/m/Input",
+            "sap/m/Select",
+            "sap/m/SearchField",
+            "sap/m/Link",
+            "sap/m/Toolbar",
+            "sap/m/ToolbarSpacer",
+            "sap/ui/core/Item",
+            "sap/ui/core/HTML",
+            "sap/ui/table/TreeTable",
+            "sap/ui/table/Column",
+            "sap/m/ComboBox",
+            "sap/m/SegmentedButton",
+            "sap/m/SegmentedButtonItem",
+            "sap/m/OverflowToolbar",
+            "sap/m/ToolbarSeparator"
+        ], function (App, Page, VBox, HBox, Title, Text, Button, MessageToast, Label,
+                     JSONModel, Panel, Input, Select, SearchField, Link, Toolbar, ToolbarSpacer,
+                     Item, HTML, TreeTable, Column, ComboBox, SegmentedButton, SegmentedButtonItem,
+                     OverflowToolbar, ToolbarSeparator) {
+
+            // Mock data for extraction changes
+            var mockExtractionChanges = [
+                // Empty_Value changes
+                { entity: "Empty_Value", modification: "update", valueFrom: "", valueTo: "123", region: "EMEA", profile: "Supplier A", createdAt: "2024-10-20T10:30:00Z", count: 15, mailId: "mail001" },
+                { entity: "Empty_Value", modification: "update", valueFrom: "", valueTo: "456", region: "APAC", profile: "Supplier B", createdAt: "2024-10-20T11:00:00Z", count: 12, mailId: "mail002" },
+                { entity: "Empty_Value", modification: "update", valueFrom: "", valueTo: "789", region: "NA", profile: "Supplier C", createdAt: "2024-10-20T12:00:00Z", count: 8, mailId: "mail003" },
+                { entity: "Empty_Value", modification: "update", valueFrom: "old", valueTo: "new", region: "EMEA", profile: "Supplier D", createdAt: "2024-10-21T09:00:00Z", count: 4, mailId: "mail004" },
+                { entity: "Empty_Value", modification: "create", valueFrom: "", valueTo: "999", region: "NA", profile: "Supplier E", createdAt: "2024-10-21T10:00:00Z", count: 3, mailId: "mail005" },
+                { entity: "Empty_Value", modification: "create", valueFrom: "", valueTo: "888", region: "APAC", profile: "Supplier F", createdAt: "2024-10-21T11:00:00Z", count: 3, mailId: "mail006" },
+
+                // options changes
+                { entity: "options", modification: "update", valueFrom: "A", valueTo: "B", region: "EMEA", profile: "Supplier G", createdAt: "2024-10-19T14:00:00Z", count: 20, mailId: "mail007" },
+                { entity: "options", modification: "update", valueFrom: "B", valueTo: "C", region: "NA", profile: "Supplier H", createdAt: "2024-10-19T15:00:00Z", count: 15, mailId: "mail008" },
+                { entity: "options", modification: "create", valueFrom: "", valueTo: "D", region: "APAC", profile: "Supplier I", createdAt: "2024-10-20T08:00:00Z", count: 10, mailId: "mail009" },
+
+                // customerMaterialNumber changes
+                { entity: "customerMaterialNumber", modification: "update", valueFrom: "MAT001", valueTo: "MAT002", region: "EMEA", profile: "Customer X", createdAt: "2024-10-18T10:00:00Z", count: 18, mailId: "mail010" },
+                { entity: "customerMaterialNumber", modification: "update", valueFrom: "MAT002", valueTo: "MAT003", region: "NA", profile: "Customer Y", createdAt: "2024-10-18T11:00:00Z", count: 10, mailId: "mail011" },
+                { entity: "customerMaterialNumber", modification: "create", valueFrom: "", valueTo: "MAT004", region: "APAC", profile: "Customer Z", createdAt: "2024-10-19T09:00:00Z", count: 6, mailId: "mail012" },
+
+                // unitOfMeasure changes (first group)
+                { entity: "unitOfMeasure", modification: "update", valueFrom: "KG", valueTo: "LB", region: "NA", profile: "Supplier J", createdAt: "2024-10-17T10:00:00Z", count: 18, mailId: "mail013" },
+                { entity: "unitOfMeasure", modification: "update", valueFrom: "L", valueTo: "GAL", region: "NA", profile: "Supplier K", createdAt: "2024-10-17T11:00:00Z", count: 10, mailId: "mail014" },
+                { entity: "unitOfMeasure", modification: "create", valueFrom: "", valueTo: "M", region: "EMEA", profile: "Supplier L", createdAt: "2024-10-18T08:00:00Z", count: 5, mailId: "mail015" },
+
+                // unitOfMeasure changes (second group - different modifications)
+                { entity: "unitOfMeasure", modification: "delete", valueFrom: "OZ", valueTo: "", region: "APAC", profile: "Supplier M", createdAt: "2024-10-16T10:00:00Z", count: 15, mailId: "mail016" },
+                { entity: "unitOfMeasure", modification: "update", valueFrom: "CM", valueTo: "IN", region: "NA", profile: "Supplier N", createdAt: "2024-10-16T11:00:00Z", count: 8, mailId: "mail017" },
+                { entity: "unitOfMeasure", modification: "create", valueFrom: "", valueTo: "FT", region: "EMEA", profile: "Supplier O", createdAt: "2024-10-17T09:00:00Z", count: 4, mailId: "mail018" },
+
+                // shipMerch changes
+                { entity: "shipMerch", modification: "update", valueFrom: "DHL", valueTo: "FedEx", region: "NA", profile: "Carrier A", createdAt: "2024-10-15T10:00:00Z", count: 12, mailId: "mail019" },
+                { entity: "shipMerch", modification: "create", valueFrom: "", valueTo: "UPS", region: "EMEA", profile: "Carrier B", createdAt: "2024-10-15T11:00:00Z", count: 8, mailId: "mail020" },
+
+                // techExtrem changes
+                { entity: "techExtrem", modification: "update", valueFrom: "V1", valueTo: "V2", region: "APAC", profile: "Tech A", createdAt: "2024-10-14T10:00:00Z", count: 10, mailId: "mail021" },
+
+                // shipCountC changes
+                { entity: "shipCountC", modification: "update", valueFrom: "100", valueTo: "150", region: "NA", profile: "Warehouse A", createdAt: "2024-10-13T10:00:00Z", count: 8, mailId: "mail022" },
+
+                // billStreet changes
+                { entity: "billStreet", modification: "create", valueFrom: "", valueTo: "Main St", region: "EMEA", profile: "Address A", createdAt: "2024-10-12T10:00:00Z", count: 15, mailId: "mail023" },
+                { entity: "billStreet", modification: "update", valueFrom: "1st Ave", valueTo: "2nd Ave", region: "NA", profile: "Address B", createdAt: "2024-10-12T11:00:00Z", count: 10, mailId: "mail024" },
+
+                // billPlace changes
+                { entity: "billPlace", modification: "update", valueFrom: "City A", valueTo: "City B", region: "APAC", profile: "Location A", createdAt: "2024-10-11T10:00:00Z", count: 12, mailId: "mail025" },
+
+                // null/delete entries
+                { entity: "null", modification: "delete", valueFrom: "obsolete", valueTo: "", region: "EMEA", profile: "System", createdAt: "2024-10-10T10:00:00Z", count: 20, mailId: "mail026" },
+
+                // supplierMaterialNumber changes
+                { entity: "supplierMaterialNumber", modification: "update", valueFrom: "SUP001", valueTo: "SUP002", region: "NA", profile: "Supplier P", createdAt: "2024-10-09T10:00:00Z", count: 25, mailId: "mail027" }
+            ];
+
+            // Data model
+            var oViewModel = new JSONModel({
+                filters: {
+                    searchText: "",
+                    entityName: "",
+                    modification: "",
+                    valueChangedFrom: "",
+                    valueChangedTo: "",
+                    createdOn: "Last 30 Days",
+                    partnerProfile: "",
+                    responsibilityRegion: "All"
+                },
+                viewType: "Standard",
+                treemapData: [],
+                tableData: [],
+                allChanges: mockExtractionChanges,
+                totalCount: mockExtractionChanges.length
+            });
+
+            // Generate treemap data from changes
+            function generateTreemapData() {
+                var changes = oViewModel.getProperty("/allChanges");
+                var groupedData = {};
+
+                changes.forEach(function(change) {
+                    var key = change.entity + "/" + change.modification;
+                    if (!groupedData[key]) {
+                        groupedData[key] = {
+                            name: key,
+                            entity: change.entity,
+                            modification: change.modification,
+                            value: 0
+                        };
+                    }
+                    groupedData[key].value += change.count;
+                });
+
+                var treemapData = Object.values(groupedData);
+                oViewModel.setProperty("/treemapData", treemapData);
+                return treemapData;
+            }
+
+            // Generate tree table data
+            function generateTableData() {
+                var changes = oViewModel.getProperty("/allChanges");
+                var grouped = {};
+
+                // Group by entity
+                changes.forEach(function(change) {
+                    if (!grouped[change.entity]) {
+                        grouped[change.entity] = {
+                            entity: change.entity,
+                            modification: "",
+                            valueFrom: "",
+                            valueTo: "",
+                            region: "",
+                            profile: "",
+                            createdAt: "",
+                            count: 0,
+                            mailId: "",
+                            children: []
+                        };
+                    }
+
+                    grouped[change.entity].children.push({
+                        entity: "",
+                        modification: change.modification,
+                        valueFrom: change.valueFrom,
+                        valueTo: change.valueTo,
+                        region: change.region,
+                        profile: change.profile,
+                        createdAt: change.createdAt,
+                        count: change.count,
+                        mailId: change.mailId
+                    });
+
+                    grouped[change.entity].count += change.count;
+                });
+
+                // Convert to array and sort by count
+                var tableData = Object.values(grouped).sort((a, b) => b.count - a.count);
+                oViewModel.setProperty("/tableData", tableData);
+                return tableData;
+            }
+
+            // Initialize treemap visualization
+            function initTreemap() {
+                var container = document.getElementById('treemapContainer');
+                if (!container) {
+                    console.error('Treemap container not found');
+                    return;
+                }
+
+                var data = oViewModel.getProperty("/treemapData");
+                if (!data || data.length === 0) {
+                    console.log('No treemap data available');
+                    return;
+                }
+
+                // Clear existing content
+                d3.select(container).selectAll("*").remove();
+
+                var width = container.clientWidth;
+                var height = 500;
+
+                var svg = d3.select(container)
+                    .append("svg")
+                    .attr("width", width)
+                    .attr("height", height);
+
+                var root = d3.hierarchy({ children: data })
+                    .sum(d => d.value)
+                    .sort((a, b) => b.value - a.value);
+
+                var treemap = d3.treemap()
+                    .size([width, height])
+                    .padding(2)
+                    .round(true);
+
+                treemap(root);
+
+                // Color scale based on count values - continuous gradient
+                var maxCount = d3.max(data, d => d.value);
+                var minCount = d3.min(data, d => d.value);
+
+                var colorScale = d3.scaleLinear()
+                    .domain([minCount, maxCount])
+                    .range(['#e3f2fd', '#1565c0']);
+
+                var cells = svg.selectAll("g")
+                    .data(root.leaves())
+                    .join("g")
+                    .attr("transform", d => `translate(${d.x0},${d.y0})`);
+
+                cells.append("rect")
+                    .attr("class", "treemap-cell")
+                    .attr("width", d => d.x1 - d.x0)
+                    .attr("height", d => d.y1 - d.y0)
+                    .attr("fill", d => colorScale(d.data.value))
+                    .on("click", function(event, d) {
+                        MessageToast.show("Entity: " + d.data.entity + ", Modification: " + d.data.modification + ", Count: " + d.data.value);
+                    });
+
+                cells.append("text")
+                    .attr("class", "treemap-text")
+                    .attr("x", 4)
+                    .attr("y", 16)
+                    .text(d => {
+                        var width = d.x1 - d.x0;
+                        var entity = d.data.entity;
+                        var mod = d.data.modification.charAt(0).toUpperCase();
+
+                        // Show nothing for very small cells
+                        if (width < 50) return "";
+
+                        // Calculate max characters that can fit
+                        var maxLen = Math.floor(width / 7);
+
+                        // Truncate entity name if needed
+                        if (entity.length > maxLen - 2) {
+                            entity = entity.substring(0, maxLen - 5) + "...";
+                        }
+
+                        return entity + "/" + mod;
+                    });
+
+                cells.append("text")
+                    .attr("class", "treemap-text")
+                    .attr("x", 4)
+                    .attr("y", 32)
+                    .text(d => {
+                        var width = d.x1 - d.x0;
+                        return width > 60 ? d.data.value : "";
+                    })
+                    .style("font-weight", "bold");
+            }
+
+            // Apply filters
+            function applyFilters() {
+                var filters = oViewModel.getProperty("/filters");
+                var allChanges = mockExtractionChanges;
+
+                var filtered = allChanges.filter(function(change) {
+                    if (filters.searchText && !change.entity.toLowerCase().includes(filters.searchText.toLowerCase())) {
+                        return false;
+                    }
+                    if (filters.entityName && !change.entity.toLowerCase().includes(filters.entityName.toLowerCase())) {
+                        return false;
+                    }
+                    if (filters.modification && !change.modification.toLowerCase().includes(filters.modification.toLowerCase())) {
+                        return false;
+                    }
+                    if (filters.valueChangedFrom && !change.valueFrom.toLowerCase().includes(filters.valueChangedFrom.toLowerCase())) {
+                        return false;
+                    }
+                    if (filters.valueChangedTo && !change.valueTo.toLowerCase().includes(filters.valueTo.toLowerCase())) {
+                        return false;
+                    }
+                    if (filters.partnerProfile && !change.profile.toLowerCase().includes(filters.partnerProfile.toLowerCase())) {
+                        return false;
+                    }
+                    if (filters.responsibilityRegion !== "All" && change.region !== filters.responsibilityRegion) {
+                        return false;
+                    }
+                    return true;
+                });
+
+                oViewModel.setProperty("/allChanges", filtered);
+                oViewModel.setProperty("/totalCount", filtered.length);
+
+                generateTreemapData();
+                generateTableData();
+
+                setTimeout(function() {
+                    initTreemap();
+                }, 100);
+
+                MessageToast.show("Filters applied: " + filtered.length + " records");
+            }
+
+            // Reset filters
+            function resetFilters() {
+                oViewModel.setProperty("/filters", {
+                    searchText: "",
+                    entityName: "",
+                    modification: "",
+                    valueChangedFrom: "",
+                    valueChangedTo: "",
+                    createdOn: "Last 30 Days",
+                    partnerProfile: "",
+                    responsibilityRegion: "All"
+                });
+                oViewModel.setProperty("/allChanges", mockExtractionChanges);
+                oViewModel.setProperty("/totalCount", mockExtractionChanges.length);
+                generateTreemapData();
+                generateTableData();
+                setTimeout(function() {
+                    initTreemap();
+                }, 100);
+                MessageToast.show("Filters reset");
+            }
+
+            // Format timestamp
+            function formatTimestamp(timestamp) {
+                if (!timestamp) return "-";
+                var date = new Date(timestamp);
+                return date.toLocaleString();
+            }
+
+            // ========== UI COMPONENTS ==========
+
+            // Filter Bar
+            var oSearchField = new SearchField({
+                width: "200px",
+                placeholder: "Search...",
+                value: "{view>/filters/searchText}",
+                search: applyFilters
+            });
+
+            var oEntityNameInput = new Input({
+                width: "150px",
+                placeholder: "Entity Name",
+                value: "{view>/filters/entityName}",
+                showValueHelp: true,
+                valueHelpIconSrc: "sap-icon://refresh"
+            });
+
+            var oModificationInput = new Input({
+                width: "130px",
+                placeholder: "Modification",
+                value: "{view>/filters/modification}",
+                showValueHelp: true,
+                valueHelpIconSrc: "sap-icon://refresh"
+            });
+
+            var oValueFromInput = new Input({
+                width: "150px",
+                placeholder: "Value Changed From",
+                value: "{view>/filters/valueChangedFrom}",
+                showValueHelp: true,
+                valueHelpIconSrc: "sap-icon://refresh"
+            });
+
+            var oValueToInput = new Input({
+                width: "150px",
+                placeholder: "Value Changed To",
+                value: "{view>/filters/valueChangedTo}",
+                showValueHelp: true,
+                valueHelpIconSrc: "sap-icon://refresh"
+            });
+
+            var oCreatedOnInput = new Input({
+                width: "130px",
+                value: "{view>/filters/createdOn}",
+                showValueHelp: true,
+                valueHelpIconSrc: "sap-icon://refresh"
+            });
+
+            var oPartnerProfileInput = new Input({
+                width: "150px",
+                placeholder: "Partner Profile",
+                value: "{view>/filters/partnerProfile}",
+                showValueHelp: true,
+                valueHelpIconSrc: "sap-icon://refresh"
+            });
+
+            var oResponsibilityRegionSelect = new Select({
+                width: "150px",
+                selectedKey: "{view>/filters/responsibilityRegion}",
+                items: [
+                    new Item({ key: "All", text: "All" }),
+                    new Item({ key: "EMEA", text: "EMEA" }),
+                    new Item({ key: "NA", text: "NA" }),
+                    new Item({ key: "APAC", text: "APAC" })
+                ]
+            });
+
+            var oGoButton = new Button({
+                text: "Go",
+                type: "Emphasized",
+                press: applyFilters
+            });
+
+            var oAdaptFiltersLink = new Link({
+                text: "Adapt Filters (1)",
+                press: function() {
+                    MessageToast.show("Adapt Filters dialog would open here");
+                }
+            });
+
+            var oFilterBar = new OverflowToolbar({
+                content: [
+                    oSearchField,
+                    new ToolbarSeparator(),
+                    oEntityNameInput,
+                    oModificationInput,
+                    oValueFromInput,
+                    oValueToInput,
+                    oCreatedOnInput,
+                    oPartnerProfileInput,
+                    oResponsibilityRegionSelect,
+                    new ToolbarSpacer(),
+                    oGoButton,
+                    oAdaptFiltersLink
+                ]
+            }).addStyleClass("filter-bar");
+
+            // Treemap Panel
+            var oTreemapHTML = new HTML({
+                content: '<div id="treemapContainer" class="treemap-container"></div>' +
+                         '<div class="treemap-legend">' +
+                         '  <span>0</span>' +
+                         '  <div class="legend-gradient"></div>' +
+                         '  <span>6+</span>' +
+                         '</div>'
+            });
+
+            var oTreemapPanel = new Panel({
+                headerText: "Entity Name / Modification",
+                width: "100%",
+                expandable: false,
+                content: new VBox({
+                    width: "100%",
+                    items: [oTreemapHTML]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Create TreeTable for hierarchical display
+            var oChangesTable = new TreeTable({
+                width: "100%",
+                selectionMode: "None",
+                enableColumnReordering: false,
+                visibleRowCount: 20,
+                rowHeight: 40,
+                expandFirstLevel: false,
+                rows: {
+                    path: "view>/tableData",
+                    parameters: {
+                        arrayNames: ["children"]
+                    }
+                },
+                columns: [
+                    new Column({
+                        label: new Label({ text: "Entity" }),
+                        width: "15%",
+                        template: new Text({
+                            text: {
+                                parts: ['view>entity', 'view>count'],
+                                formatter: function(entity, count) {
+                                    if (entity) {
+                                        return count ? entity + " (" + count + ")" : entity;
+                                    }
+                                    return "";
+                                }
+                            },
+                            wrapping: false
+                        })
+                    }),
+                    new Column({
+                        label: new Label({ text: "Modification" }),
+                        width: "12%",
+                        template: new Text({
+                            text: "{view>modification}",
+                            wrapping: false
+                        })
+                    }),
+                    new Column({
+                        label: new Label({ text: "Value Changed From" }),
+                        width: "15%",
+                        template: new Text({
+                            text: "{view>valueFrom}",
+                            wrapping: false
+                        })
+                    }),
+                    new Column({
+                        label: new Label({ text: "Value Changed To" }),
+                        width: "15%",
+                        template: new Text({
+                            text: "{view>valueTo}",
+                            wrapping: false
+                        })
+                    }),
+                    new Column({
+                        label: new Label({ text: "Responsibility Region" }),
+                        width: "10%",
+                        template: new Text({
+                            text: "{view>region}",
+                            wrapping: false
+                        })
+                    }),
+                    new Column({
+                        label: new Label({ text: "Partner Profile" }),
+                        width: "12%",
+                        template: new Text({
+                            text: "{view>profile}",
+                            wrapping: false
+                        })
+                    }),
+                    new Column({
+                        label: new Label({ text: "Created At" }),
+                        width: "13%",
+                        template: new Text({
+                            text: {
+                                path: "view>createdAt",
+                                formatter: formatTimestamp
+                            },
+                            wrapping: false
+                        })
+                    }),
+                    new Column({
+                        label: new Label({ text: "Count" }),
+                        width: "6%",
+                        template: new Text({
+                            text: "{view>count}",
+                            wrapping: false
+                        })
+                    }),
+                    new Column({
+                        label: new Label({ text: "MailID" }),
+                        width: "7%",
+                        template: new Text({
+                            text: "{view>mailId}",
+                            wrapping: false
+                        })
+                    })
+                ]
+            });
+
+            var oTableToolbar = new OverflowToolbar({
+                content: [
+                    new Title({
+                        text: {
+                            parts: ['view>/totalCount', 'view>/viewType'],
+                            formatter: function(count, viewType) {
+                                return "(" + count + ") " + viewType;
+                            }
+                        },
+                        level: "H5"
+                    }),
+                    new ToolbarSpacer(),
+                    new Select({
+                        width: "120px",
+                        selectedKey: "{view>/viewType}",
+                        items: [
+                            new Item({ key: "Standard", text: "Standard" }),
+                            new Item({ key: "Detailed", text: "Detailed" })
+                        ]
+                    }),
+                    new Button({
+                        icon: "sap-icon://table-view",
+                        press: function() {
+                            MessageToast.show("Table view");
+                        }
+                    }),
+                    new Button({
+                        icon: "sap-icon://grid",
+                        press: function() {
+                            MessageToast.show("Grid view");
+                        }
+                    })
+                ]
+            });
+
+            var oTablePanel = new Panel({
+                width: "100%",
+                expandable: false,
+                content: new VBox({
+                    width: "100%",
+                    items: [
+                        oTableToolbar,
+                        oChangesTable
+                    ]
+                }).addStyleClass("sapUiSmallMargin")
+            }).addStyleClass("sapUiSmallMarginBottom");
+
+            // Main Content
+            var oMainContent = new VBox({
+                width: "100%",
+                items: [
+                    new HBox({
+                        width: "100%",
+                        justifyContent: "SpaceBetween",
+                        alignItems: "Center",
+                        items: [
+                            new VBox({
+                                items: [
+                                    new HBox({
+                                        alignItems: "Center",
+                                        items: [
+                                            new Title({
+                                                text: "Extraction Changes Analytics",
+                                                level: "H2"
+                                            }),
+                                            new Select({
+                                                width: "120px",
+                                                selectedKey: "{view>/viewType}",
+                                                items: [
+                                                    new Item({ key: "Standard", text: "Standard" }),
+                                                    new Item({ key: "Detailed", text: "Detailed" })
+                                                ]
+                                            }).addStyleClass("sapUiTinyMarginBegin")
+                                        ]
+                                    }),
+                                    new Text({
+                                        text: "Track and analyze field-level changes in document extractions"
+                                    }).addStyleClass("sapUiTinyMarginTop")
+                                ]
+                            }),
+                            new Button({
+                                text: "Back to Audit",
+                                icon: "sap-icon://navigation-left-arrow",
+                                press: function() {
+                                    window.location.href = "./audit.html";
+                                }
+                            })
+                        ]
+                    }).addStyleClass("sapUiMediumMarginTop sapUiSmallMarginBottom"),
+                    oFilterBar,
+                    oTreemapPanel,
+                    oTablePanel
+                ],
+                alignItems: "Stretch"
+            }).addStyleClass("sapUiContentPadding");
+
+            // Create Page
+            var oPage = new Page({
+                title: "Extraction Changes Analytics - DocAI",
+                showHeader: true,
+                showNavButton: true,
+                navButtonPress: function() {
+                    window.location.href = "./audit.html";
+                },
+                content: [
+                    new VBox({
+                        width: "100%",
+                        items: [oMainContent],
+                        alignItems: "Center"
+                    })
+                ]
+            });
+
+            // Create App
+            var oApp = new App({
+                pages: [oPage]
+            });
+
+            oApp.placeAt("content");
+            oApp.setModel(oViewModel, "view");
+
+            // Initialize data and treemap after DOM is ready
+            setTimeout(function() {
+                generateTreemapData();
+                generateTableData();
+                setTimeout(function() {
+                    initTreemap();
+                }, 200);
+            }, 500);
+
+            // Handle window resize
+            window.addEventListener('resize', function() {
+                setTimeout(function() {
+                    initTreemap();
+                }, 200);
+            });
+
+        }, function(err) {
+            console.error("UI5 module loading failed:", err);
+            document.body.innerHTML = '<div style="padding:20px;color:red;">Error loading UI5 framework. Please check console and refresh.</div>';
+        });
+    </script>
+</head>
+<body class="sapUiBody sapUiSizeCompact">
+    <div id="content"></div>
+</body>
+</html>
